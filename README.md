@@ -1,7 +1,61 @@
-# Tauri + React + Typescript
+# ai-voiceinput-frontend (Tauri版 VoiceInputApp)
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Windows向けの軽量・高機能な常駐型音声入力アプリケーションです。WPF版のコンセプトを継承し、Tauri 2.0 + React で再構築されました。
+ローカルAIサーバー（Lemonade等）と連携し、音声認識から日本語校正、そしてクリップボード履歴を汚さない「Ghost Paste」による自動入力までをシームレスに行います。
 
-## Recommended IDE Setup
+## 主な機能
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- **システムワイドな音声入力**: `Ctrl + Win` キーを押し続けている間、どのアプリケーションからでも即座に録音を開始できます。
+- **Ghost Paste (Ninja Paste)**: Windowsのクリップボード履歴（Win+V）を汚さず、かつIMEの状態に左右されない安定したテキスト入力を実現します。
+- **AI校正連携**: 文字起こし後、LLM（Large Language Model）を使用して自動的に自然な日本語へ校正します（オン/オフ切替可能）。
+- **リアルタイム・オーバーレイ**: 録音中、文字起こし中、校正中のステータスを画面下部にモダンな透過ウィンドウで表示します。
+- **タスクトレイ常駐**: メインウィンドウを閉じてもタスクトレイに常駐し、バックグラウンドで待機します。
+- **ダーク/ライトモード対応**: Apple風のクリーンなライトモードと、Tokyo Night風のモダンなダークモードを切り替え可能です。
+- **起動時最小化設定**: 起動時にウィンドウを表示せず、タスクトレイに直接格納する設定が可能です。
+- **簡易チャット & 履歴管理**: 音声入力の履歴確認や、AIとのテキストチャットが可能な専用タブを搭載。
+
+## セットアップと使用方法
+
+### 1. 前提条件
+- **OpenAI 互換 API サーバー**: 音声認識（Whisper）および校正（LLM）を行うためのサーバーが必要です。
+  - 開発・動作検証にはローカル AI サーバーの Lemonade を推奨しています。
+
+### 2. インストール / 実行
+ビルド済みのインストーラー（.msi / .exe）を実行するか、開発環境でビルドしてください。
+
+### 3. アプリの設定
+1. アプリを起動し、設定タブを開きます。
+2. 以下の項目を設定して「設定を保存」をクリックします。
+   - **API Base URL**: API サーバーのベース URL（例: `http://localhost:13305/v1`）
+   - **使用するマイク**: 入力に使用するデバイスを選択。
+   - **Whisper/LLM Model**: サーバー側で定義されているモデル名。
+   - **自動で日本語校正を実行する**: 必要に応じてチェック。
+
+### 4. 操作方法
+1. テキストを入力したい場所（エディタ、ブラウザ、チャット等）にフォーカスを当てます。
+2. `Ctrl + Win` キーを押し続けている間、録音が行われます。
+3. キーを離すと、自動的に文字起こしと校正が始まり、結果がその場に貼り付けられます。
+
+## 開発者向け: ビルドと実行
+
+### 開発モードの起動
+```bash
+pnpm install
+pnpm tauri dev
+```
+
+### インストーラーのビルド
+```bash
+pnpm tauri build
+```
+`src-tauri/target/release/bundle/` 配下にインストーラーが生成されます。
+
+## 技術スタック
+- **Framework**: [Tauri 2.0](https://tauri.app/) (Rust)
+- **Frontend**: React + TypeScript + Vite
+- **Audio**: [cpal](https://github.com/RustAudio/cpal) (Rustでの低レイテンシ音声キャプチャ)
+- **AI API**: OpenAI互換API
+- **Native Logic**: `windows-rs` による低レベルキーボードフック (`SetWindowsHookEx`)
+
+## ライセンス
+MIT License
