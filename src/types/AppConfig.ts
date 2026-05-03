@@ -7,6 +7,7 @@ export interface AppConfig {
   postRecordingDelayMs: number;
   isAutoCorrectionEnabled: boolean;
   microphoneDeviceNumber: number;
+  theme: "dark" | "light";
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -19,4 +20,5 @@ export const DEFAULT_CONFIG: AppConfig = {
   postRecordingDelayMs: 500,
   isAutoCorrectionEnabled: false,
   microphoneDeviceNumber: 0,
+  theme: "dark",
 };

@@ -26,6 +26,10 @@ function App() {
   const configRef = useRef(config);
   useEffect(() => {
     configRef.current = config;
+    // テーマの反映
+    document.documentElement.setAttribute("data-theme", config.theme);
+    // オーバーレイにも通知
+    emit("theme-changed", config.theme).catch(() => {});
   }, [config]);
 
   // 処理中の重複を防ぐ ref

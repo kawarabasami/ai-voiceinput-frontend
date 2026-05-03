@@ -24,9 +24,15 @@ const OverlayStatus: React.FC = () => {
       setVisible(false);
     });
 
+    const unlistenTheme = listen<string>("theme-changed", (event) => {
+      console.log("[Overlay] theme-changed received:", event.payload);
+      document.documentElement.setAttribute("data-theme", event.payload);
+    });
+
     return () => {
       unlistenShow.then((fn) => fn());
       unlistenHide.then((fn) => fn());
+      unlistenTheme.then((fn) => fn());
     };
   }, []);
 

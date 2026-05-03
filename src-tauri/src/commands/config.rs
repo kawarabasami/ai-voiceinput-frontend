@@ -21,6 +21,12 @@ pub struct AppConfig {
     pub is_auto_correction_enabled: bool,
     #[serde(default)]
     pub microphone_device_number: usize,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    "dark".to_string()
 }
 
 fn default_api_base_url() -> String {
@@ -53,6 +59,7 @@ impl Default for AppConfig {
             post_recording_delay_ms: default_post_recording_delay_ms(),
             is_auto_correction_enabled: false,
             microphone_device_number: 0,
+            theme: default_theme(),
         }
     }
 }

@@ -185,6 +185,32 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ config, onSave }) => {
         </label>
       </div>
 
+      <div className="settings-group">
+        <label className="settings-label">表示テーマ</label>
+        <div className="theme-toggle">
+          <label className={`theme-option ${form.theme === "dark" ? "active" : ""}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="dark"
+              checked={form.theme === "dark"}
+              onChange={() => setForm({ ...form, theme: "dark" })}
+            />
+            🌙 ダーク
+          </label>
+          <label className={`theme-option ${form.theme === "light" ? "active" : ""}`}>
+            <input
+              type="radio"
+              name="theme"
+              value="light"
+              checked={form.theme === "light"}
+              onChange={() => setForm({ ...form, theme: "light" })}
+            />
+            ☀️ ライト
+          </label>
+        </div>
+      </div>
+
       <div className="settings-actions">
         <button id="save-settings-btn" className="btn btn-primary" onClick={handleSave}>
           設定を保存
