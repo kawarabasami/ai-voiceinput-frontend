@@ -12,8 +12,8 @@ export interface AppConfig {
 export const DEFAULT_CONFIG: AppConfig = {
   apiBaseUrl: "http://127.0.0.1:13305/v1",
   whisperModel: "whisper-v3-turbo-FLM",
-  llmModels: "qwen2.5-7b-instruct",
-  defaultLlmModel: "qwen2.5-7b-instruct",
+  llmModels: "qwen3.5-2b-FLM,qwen3.5-4b-FLM,gemma4-it-e2b-FLM",
+  defaultLlmModel: "qwen3.5-2b-FLM",
   correctionPrompt:
     "以下の音声認識されたテキストの誤字脱字を修正し、自然な日本語にしてください。修正後のテキストのみを出力してください。",
   postRecordingDelayMs: 500,
