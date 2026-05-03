@@ -34,8 +34,14 @@ function App() {
   const setStatus = (text: string, color: string) => {
     setStatusText(text);
     setStatusColor(color);
-    // オーバーレイにも通知
-    emit("overlay-show", { text, color }).catch(() => {});
+    
+    // 「待機中」を含む場合はオーバーレイを非表示にする
+    if (text.includes("待機中")) {
+      emit("overlay-hide").catch(() => {});
+    } else {
+      // それ以外はオーバーレイを表示
+      emit("overlay-show", { text, color }).catch(() => {});
+    }
   };
 
   const resetStatus = () => {

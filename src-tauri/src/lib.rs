@@ -51,7 +51,7 @@ pub fn run() {
                             height: 60,
                         });
                         let x = (screen_size.width as i32 - win_size.width as i32) / 2;
-                        let y = screen_size.height as i32 - win_size.height as i32 - 60; // タスクバー上
+                        let y = screen_size.height as i32 - win_size.height as i32 - 100; // タスクバーより上に配置
                         let _ = overlay.set_position(tauri::PhysicalPosition { x, y });
                     }
                 }

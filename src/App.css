@@ -552,7 +552,8 @@ body {
 
 /* ===== オーバーレイウィンドウ ===== */
 .overlay-status {
-  height: 100vh;
+  height: calc(100vh - 4px);
+  margin: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
