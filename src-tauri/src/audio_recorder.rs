@@ -1,0 +1,310 @@
+use std::sync::{Arc, Mutex};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Device, SampleFormat, SupportedStreamConfig};
+
+pub struct AudioRecorder {
+    is_recording: bool,
+    buffer: Vec<f32>,
+    sample_rate: u32,
+}
+
+// cpal::Stream を Send + Sync にするためのラッパー
+struct SendStream(cpal::Stream);
+unsafe impl Send for SendStream {}
+unsafe impl Sync for SendStream {}
+
+static ACTIVE_STREAM: Mutex<Option<SendStream>> = Mutex::new(None);
+
+impl AudioRecorder {
+    pub fn new() -> Self {
+        Self {
+            is_recording: false,
+            buffer: Vec::new(),
+            sample_rate: 16000,
+        }
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+}
+
+pub fn start_recording(
+    recorder_state: Arc<Mutex<AudioRecorder>>,
+    device_index: usize,
+) -> Result<(), String> {
+    let mut recorder = recorder_state.lock().map_err(|e| e.to_string())?;
+    if recorder.is_recording {
+        return Ok(());
+    }
+
+    let host = cpal::default_host();
+    let devices: Vec<Device> = host
+        .input_devices()
+        .map_err(|e| format!("デバイス列挙失敗: {}", e))?
+        .collect();
+
+    let device = devices
+        .into_iter()
+        .nth(device_index)
+        .or_else(|| host.default_input_device())
+        .ok_or_else(|| "マイクデバイスが見つかりません".to_string())?;
+
+    let config = find_config_16khz(&device)?;
+    let sample_format = config.sample_format();
+
+    recorder.buffer.clear();
+    recorder.sample_rate = config.sample_rate().0;
+    recorder.is_recording = true;
+
+    let buffer_clone = Arc::clone(&recorder_state);
+
+    let stream = match sample_format {
+        SampleFormat::F32 => build_stream::<f32>(&device, &config.into(), buffer_clone),
+        SampleFormat::I16 => build_stream_i16(&device, &config.into(), buffer_clone),
+        SampleFormat::U16 => build_stream_u16(&device, &config.into(), buffer_clone),
+        SampleFormat::I32 => build_stream_i32(&device, &config.into(), buffer_clone),
+        SampleFormat::I8 => build_stream_i8(&device, &config.into(), buffer_clone),
+        SampleFormat::U8 => build_stream_u8(&device, &config.into(), buffer_clone),
+        _ => Err(format!("サポートされていないサンプルフォーマットです: {:?}", sample_format)),
+    }?;
+
+    stream.play().map_err(|e| format!("ストリーム開始失敗: {}", e))?;
+    
+    let mut active_stream = ACTIVE_STREAM.lock().unwrap();
+    *active_stream = Some(SendStream(stream));
+
+    Ok(())
+}
+
+fn find_config_16khz(device: &Device) -> Result<SupportedStreamConfig, String> {
+    let supported = device
+        .supported_input_configs()
+        .map_err(|e| format!("設定取得失敗: {}", e))?;
+
+    let target_rate = cpal::SampleRate(16000);
+
+    for range in supported {
+        if range.min_sample_rate() <= target_rate && target_rate <= range.max_sample_rate() {
+            return Ok(range.with_sample_rate(target_rate));
+        }
+    }
+
+    device
+        .default_input_config()
+        .map_err(|e| format!("デフォルト設定取得失敗: {}", e))
+}
+
+fn build_stream<T>(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    state: Arc<Mutex<AudioRecorder>>,
+) -> Result<cpal::Stream, String>
+where
+    T: cpal::Sample + cpal::SizedSample + hound::Sample,
+    f32: From<T>,
+{
+    let channels = config.channels as usize;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[T], _| {
+                if let Ok(mut recorder) = state.lock() {
+                    if recorder.is_recording {
+                        for frame in data.chunks(channels) {
+                            recorder.buffer.push(f32::from(frame[0]));
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("[AudioRecorder] ストリームエラー: {}", err),
+            None,
+        )
+        .map_err(|e| format!("ストリーム作成失敗: {}", e))?;
+    Ok(stream)
+}
+
+fn build_stream_i16(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    state: Arc<Mutex<AudioRecorder>>,
+) -> Result<cpal::Stream, String> {
+    let channels = config.channels as usize;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[i16], _| {
+                if let Ok(mut recorder) = state.lock() {
+                    if recorder.is_recording {
+                        for frame in data.chunks(channels) {
+                            recorder.buffer.push(frame[0] as f32 / i16::MAX as f32);
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("[AudioRecorder] ストリームエラー: {}", err),
+            None,
+        )
+        .map_err(|e| format!("ストリーム作成失敗: {}", e))?;
+    Ok(stream)
+}
+
+fn build_stream_i32(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    state: Arc<Mutex<AudioRecorder>>,
+) -> Result<cpal::Stream, String> {
+    let channels = config.channels as usize;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[i32], _| {
+                if let Ok(mut recorder) = state.lock() {
+                    if recorder.is_recording {
+                        for frame in data.chunks(channels) {
+                            recorder.buffer.push(frame[0] as f32 / i32::MAX as f32);
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("[AudioRecorder] ストリームエラー: {}", err),
+            None,
+        )
+        .map_err(|e| format!("ストリーム作成失敗: {}", e))?;
+    Ok(stream)
+}
+
+fn build_stream_u16(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    state: Arc<Mutex<AudioRecorder>>,
+) -> Result<cpal::Stream, String> {
+    let channels = config.channels as usize;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[u16], _| {
+                if let Ok(mut recorder) = state.lock() {
+                    if recorder.is_recording {
+                        for frame in data.chunks(channels) {
+                            let s = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
+                            recorder.buffer.push(s);
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("[AudioRecorder] ストリームエラー: {}", err),
+            None,
+        )
+        .map_err(|e| format!("ストリーム作成失敗: {}", e))?;
+    Ok(stream)
+}
+
+fn build_stream_i8(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    state: Arc<Mutex<AudioRecorder>>,
+) -> Result<cpal::Stream, String> {
+    let channels = config.channels as usize;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[i8], _| {
+                if let Ok(mut recorder) = state.lock() {
+                    if recorder.is_recording {
+                        for frame in data.chunks(channels) {
+                            recorder.buffer.push(frame[0] as f32 / i8::MAX as f32);
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("[AudioRecorder] ストリームエラー: {}", err),
+            None,
+        )
+        .map_err(|e| format!("ストリーム作成失敗: {}", e))?;
+    Ok(stream)
+}
+
+fn build_stream_u8(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    state: Arc<Mutex<AudioRecorder>>,
+) -> Result<cpal::Stream, String> {
+    let channels = config.channels as usize;
+    let stream = device
+        .build_input_stream(
+            config,
+            move |data: &[u8], _| {
+                if let Ok(mut recorder) = state.lock() {
+                    if recorder.is_recording {
+                        for frame in data.chunks(channels) {
+                            let s = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
+                            recorder.buffer.push(s);
+                        }
+                    }
+                }
+            },
+            |err| eprintln!("[AudioRecorder] ストリームエラー: {}", err),
+            None,
+        )
+        .map_err(|e| format!("ストリーム作成失敗: {}", e))?;
+    Ok(stream)
+}
+
+pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<String, String> {
+    {
+        let mut active_stream = ACTIVE_STREAM.lock().unwrap();
+        *active_stream = None;
+    }
+
+    let mut recorder = recorder_state.lock().map_err(|e| e.to_string())?;
+    if !recorder.is_recording {
+        return Err("録音中ではありません".to_string());
+    }
+
+    recorder.is_recording = false;
+
+    let buffer = recorder.buffer.clone();
+    let sample_rate = recorder.sample_rate;
+    recorder.buffer.clear();
+
+    if buffer.is_empty() {
+        return Err("録音データが空です".to_string());
+    }
+
+    let temp_path = std::env::temp_dir().join("voice_input_temp.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer =
+        hound::WavWriter::create(&temp_path, spec).map_err(|e| format!("WAV作成失敗: {}", e))?;
+
+    for sample in &buffer {
+        let s = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+        writer
+            .write_sample(s)
+            .map_err(|e| format!("WAV書き込み失敗: {}", e))?;
+    }
+    writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;
+
+    Ok(temp_path.to_string_lossy().to_string())
+}
+
+pub fn get_input_devices() -> Result<Vec<(usize, String)>, String> {
+    let host = cpal::default_host();
+    let devices = host
+        .input_devices()
+        .map_err(|e| format!("デバイス列挙失敗: {}", e))?;
+
+    Ok(devices
+        .enumerate()
+        .map(|(i, d)| {
+            let name = d.name().unwrap_or_else(|_| format!("デバイス {}", i));
+            (i, name)
+        })
+        .collect())
+}

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ai-voiceinput-frontend",
+  "productName": "VoiceInputApp",
   "version": "0.1.0",
-  "identifier": "com.kawar.ai-voiceinput-frontend",
+  "identifier": "com.kawar.voice-input-app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,11 +12,39 @@
   "app": {
     "windows": [
       {
-        "title": "ai-voiceinput-frontend",
-        "width": 800,
-        "height": 600
+        "label": "main",
+        "title": "VoiceInputApp",
+        "width": 600,
+        "height": 700,
+        "minWidth": 500,
+        "minHeight": 500,
+        "visible": true,
+        "decorations": true,
+        "center": true
+      },
+      {
+        "label": "overlay",
+        "url": "overlay.html",
+        "title": "",
+        "width": 300,
+        "height": 60,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true,
+        "resizable": false,
+        "shadow": false,
+        "x": 0,
+        "y": 0
       }
     ],
+    "trayIcon": {
+      "iconPath": "icons/32x32.png",
+      "iconAsTemplate": true,
+      "menuOnLeftClick": false,
+      "tooltip": "VoiceInputApp"
+    },
     "security": {
       "csp": null
     }
