@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "VoiceInputApp",
+  "productName": "ai-voiceinput-frontend",
   "version": "0.1.0",
   "identifier": "com.kawar.voice-input-app",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "VoiceInputApp",
+        "title": "ai-voiceinput-frontend",
         "width": 600,
         "height": 700,
         "minWidth": 500,
