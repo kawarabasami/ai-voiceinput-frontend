@@ -23,6 +23,8 @@ pub struct AppConfig {
     pub microphone_device_number: usize,
     #[serde(default = "default_theme")]
     pub theme: String,
+    #[serde(default)]
+    pub start_minimized: bool,
 }
 
 fn default_theme() -> String {
@@ -60,6 +62,7 @@ impl Default for AppConfig {
             is_auto_correction_enabled: false,
             microphone_device_number: 0,
             theme: default_theme(),
+            start_minimized: false,
         }
     }
 }

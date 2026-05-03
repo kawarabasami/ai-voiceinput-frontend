@@ -38,6 +38,16 @@ pub fn run() {
             // システムトレイ設定
             tray::setup_tray(app.handle())?;
 
+            // 設定の読み込み
+            let config = config::load_config(app.handle().clone()).unwrap_or_default();
+
+            // メインウィンドウの表示制御 (start_minimized が false の場合のみ表示)
+            if !config.start_minimized {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
+
             // グローバルショートカット設定（Ctrl+Win）
             shortcut::setup_global_shortcut(app.handle());
 

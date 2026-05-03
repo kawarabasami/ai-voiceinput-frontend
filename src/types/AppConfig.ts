@@ -8,6 +8,7 @@ export interface AppConfig {
   isAutoCorrectionEnabled: boolean;
   microphoneDeviceNumber: number;
   theme: "dark" | "light";
+  startMinimized: boolean;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -21,4 +22,5 @@ export const DEFAULT_CONFIG: AppConfig = {
   isAutoCorrectionEnabled: false,
   microphoneDeviceNumber: 0,
   theme: "dark",
+  startMinimized: false,
 };

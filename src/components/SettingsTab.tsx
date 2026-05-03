@@ -185,6 +185,20 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ config, onSave }) => {
         </label>
       </div>
 
+      <div className="settings-group settings-checkbox">
+        <label className="checkbox-label" htmlFor="start-minimized">
+          <input
+            id="start-minimized"
+            type="checkbox"
+            checked={form.startMinimized}
+            onChange={(e) =>
+              setForm({ ...form, startMinimized: e.target.checked })
+            }
+          />
+          起動時に最小化（タスクトレイに格納）
+        </label>
+      </div>
+
       <div className="settings-group">
         <label className="settings-label">表示テーマ</label>
         <div className="theme-toggle">
