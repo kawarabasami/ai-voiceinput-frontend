@@ -4,6 +4,7 @@ use tauri::AppHandle;
 #[cfg(target_os = "windows")]
 mod windows_hook {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
     use tauri::{AppHandle, Emitter};
     use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -15,8 +16,14 @@ mod windows_hook {
     };
 
     static SHORTCUT_ACTIVE: AtomicBool = AtomicBool::new(false);
-    static mut HOOK_HANDLE: Option<HHOOK> = None;
-    static mut APP_HANDLE_PTR: Option<*const AppHandle> = None;
+
+    // HHOOK や生ポインタを Mutex で扱えるようにするためのラッパー
+    struct SendWrapper<T>(T);
+    unsafe impl<T> Send for SendWrapper<T> {}
+    unsafe impl<T> Sync for SendWrapper<T> {}
+
+    static HOOK_HANDLE: Mutex<Option<SendWrapper<HHOOK>>> = Mutex::new(None);
+    static APP_HANDLE_PTR: Mutex<Option<SendWrapper<*const AppHandle>>> = Mutex::new(None);
 
     unsafe extern "system" fn keyboard_proc(
         n_code: i32,
@@ -52,26 +59,36 @@ mod windows_hook {
                     if !SHORTCUT_ACTIVE.load(Ordering::SeqCst) {
                         SHORTCUT_ACTIVE.store(true, Ordering::SeqCst);
                         println!("[Shortcut] Shortcut Down (Ctrl+Win)");
-                        if let Some(ptr) = APP_HANDLE_PTR {
-                            let handle = &*ptr;
-                            let _ = handle.emit("shortcut-down", ());
+                        if let Ok(guard) = APP_HANDLE_PTR.lock() {
+                            if let Some(wrapper) = &*guard {
+                                let handle = &*wrapper.0;
+                                let _ = handle.emit("shortcut-down", ());
+                            }
                         }
                     }
                 } else {
                     if SHORTCUT_ACTIVE.load(Ordering::SeqCst) {
                         SHORTCUT_ACTIVE.store(false, Ordering::SeqCst);
                         println!("[Shortcut] Shortcut Up");
-                        if let Some(ptr) = APP_HANDLE_PTR {
-                            let handle = &*ptr;
-                            let _ = handle.emit("shortcut-up", ());
+                        if let Ok(guard) = APP_HANDLE_PTR.lock() {
+                            if let Some(wrapper) = &*guard {
+                                let handle = &*wrapper.0;
+                                let _ = handle.emit("shortcut-up", ());
+                            }
                         }
                     }
                 }
             }
         }
 
+        let h_hook = if let Ok(guard) = HOOK_HANDLE.lock() {
+            guard.as_ref().map(|w| w.0).unwrap_or_default()
+        } else {
+            HHOOK::default()
+        };
+
         CallNextHookEx(
-            HOOK_HANDLE.unwrap_or_default(),
+            h_hook,
             n_code,
             w_param,
             l_param,
@@ -92,25 +109,38 @@ mod windows_hook {
 
     pub fn install_hook(app: &AppHandle) {
         unsafe {
-            APP_HANDLE_PTR = Some(app as *const AppHandle);
+            if let Ok(mut guard) = APP_HANDLE_PTR.lock() {
+                *guard = Some(SendWrapper(app as *const AppHandle));
+            }
             
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
             let hmod = GetModuleHandleW(None).unwrap_or_default();
             
             let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0)
                 .expect("キーボードフックの設定に失敗しました");
-            HOOK_HANDLE = Some(hook);
+            
+            if let Ok(mut guard) = HOOK_HANDLE.lock() {
+                *guard = Some(SendWrapper(hook));
+            }
             println!("[Shortcut] Keyboard hook installed (hmod: {:?})", hmod);
         }
     }
 
     pub fn uninstall_hook() {
         unsafe {
-            if let Some(hook) = HOOK_HANDLE.take() {
+            let mut h_hook = None;
+            if let Ok(mut guard) = HOOK_HANDLE.lock() {
+                h_hook = guard.take().map(|w| w.0);
+            }
+            
+            if let Some(hook) = h_hook {
                 let _ = UnhookWindowsHookEx(hook);
                 println!("[Shortcut] Keyboard hook uninstalled");
             }
-            APP_HANDLE_PTR = None;
+            
+            if let Ok(mut guard) = APP_HANDLE_PTR.lock() {
+                *guard = None;
+            }
         }
     }
 }

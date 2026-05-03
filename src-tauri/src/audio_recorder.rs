@@ -9,7 +9,7 @@ pub struct AudioRecorder {
 }
 
 // cpal::Stream を Send + Sync にするためのラッパー
-struct SendStream(cpal::Stream);
+struct SendStream(#[allow(dead_code)] cpal::Stream);
 unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}
 
@@ -24,6 +24,7 @@ impl AudioRecorder {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_recording(&self) -> bool {
         self.is_recording
     }
