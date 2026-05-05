@@ -17,11 +17,12 @@ pub struct AudioRecorder {
     pub buffer: Vec<i16>,
     pub sample_rate: u32,
     pub silent_frames: u32,
-    pub vad_buffer: Vec<i16>,
+    pub vad_buffer: VecDeque<i16>,
     pub silence_history: Vec<i16>,
     pub app_handle: Option<AppHandle>,
     pub vad: SendVad,
     pub lookback_buffer: VecDeque<i16>,
+    pub mono_buffer: Vec<i16>,
 }
 
 // cpal::Stream を Send + Sync にするためのラッパー
@@ -39,11 +40,12 @@ impl AudioRecorder {
             buffer: Vec::new(),
             sample_rate: 16000,
             silent_frames: 0,
-            vad_buffer: Vec::new(),
+            vad_buffer: VecDeque::new(),
             silence_history: Vec::new(),
             app_handle: None,
             vad: SendVad(Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive)),
             lookback_buffer: VecDeque::with_capacity(8000), // 0.5s at 16kHz
+            mono_buffer: Vec::new(),
         }
     }
 
@@ -113,10 +115,6 @@ pub fn ensure_stream(
     Ok(())
 }
 
-pub fn get_current_device_index() -> Option<usize> {
-    *CURRENT_DEVICE_INDEX.lock().unwrap()
-}
-
 pub fn start_recording(
     recorder_state: Arc<Mutex<AudioRecorder>>,
     device_index: usize,
@@ -160,20 +158,20 @@ fn find_config_16khz(device: &Device) -> Result<SupportedStreamConfig, String> {
         .map_err(|e| format!("デフォルト設定取得失敗: {}", e))
 }
 
-fn process_audio_samples(recorder: &mut AudioRecorder, samples: &[i16]) {
-    for &sample in samples {
-        recorder.vad_buffer.push(sample);
-    }
+fn process_audio_samples(recorder: &mut AudioRecorder) {
+    recorder.vad_buffer.extend(recorder.mono_buffer.iter().copied());
 
     while recorder.vad_buffer.len() >= 480 {
-        let frame: Vec<i16> = recorder.vad_buffer.drain(..480).collect();
+        let mut frame = [0i16; 480];
+        for sample in &mut frame {
+            *sample = recorder.vad_buffer.pop_front().unwrap_or_default();
+        }
         let is_voice = recorder.vad.0.is_voice_segment(&frame).unwrap_or(true);
         
         if is_voice {
             // 有音フレームになったら、直近の無音履歴（リーディングマージン）を保存バッファに追加
             if !recorder.silence_history.is_empty() {
-                recorder.buffer.extend_from_slice(&recorder.silence_history);
-                recorder.silence_history.clear();
+                recorder.buffer.append(&mut recorder.silence_history);
             }
             
             recorder.buffer.extend_from_slice(&frame);
@@ -210,15 +208,17 @@ where
             config,
             move |data: &[T], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
+                    recorder.mono_buffer.clear();
+                    recorder.mono_buffer.reserve(data.len() / channels);
                     for frame in data.chunks(channels) {
                         let f32_sample = f32::from(frame[0]);
                         let i16_sample = (f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                        mono_i16_samples.push(i16_sample);
+                        recorder.mono_buffer.push(i16_sample);
                     }
 
                     // 常に遡りバッファを更新（直近500ms分を保持）
-                    for &sample in &mono_i16_samples {
+                    for i in 0..recorder.mono_buffer.len() {
+                        let sample = recorder.mono_buffer[i];
                         if recorder.lookback_buffer.len() >= 8000 {
                             recorder.lookback_buffer.pop_front();
                         }
@@ -226,7 +226,7 @@ where
                     }
 
                     if recorder.is_recording {
-                        process_audio_samples(&mut recorder, &mono_i16_samples);
+                        process_audio_samples(&mut recorder);
                     }
                 }
             },
@@ -248,13 +248,15 @@ fn build_stream_i16(
             config,
             move |data: &[i16], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
+                    recorder.mono_buffer.clear();
+                    recorder.mono_buffer.reserve(data.len() / channels);
                     for frame in data.chunks(channels) {
-                        mono_i16_samples.push(frame[0]);
+                        recorder.mono_buffer.push(frame[0]);
                     }
 
                     // 常に遡りバッファを更新
-                    for &sample in &mono_i16_samples {
+                    for i in 0..recorder.mono_buffer.len() {
+                        let sample = recorder.mono_buffer[i];
                         if recorder.lookback_buffer.len() >= 8000 {
                             recorder.lookback_buffer.pop_front();
                         }
@@ -262,7 +264,7 @@ fn build_stream_i16(
                     }
 
                     if recorder.is_recording {
-                        process_audio_samples(&mut recorder, &mono_i16_samples);
+                        process_audio_samples(&mut recorder);
                     }
                 }
             },
@@ -284,13 +286,23 @@ fn build_stream_i32(
             config,
             move |data: &[i32], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    if recorder.is_recording {
-                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks(channels) {
-                            let f32_sample = frame[0] as f32 / i32::MAX as f32;
-                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    recorder.mono_buffer.clear();
+                    recorder.mono_buffer.reserve(data.len() / channels);
+                    for frame in data.chunks(channels) {
+                        let f32_sample = frame[0] as f32 / i32::MAX as f32;
+                        recorder.mono_buffer.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    }
+
+                    for i in 0..recorder.mono_buffer.len() {
+                        let sample = recorder.mono_buffer[i];
+                        if recorder.lookback_buffer.len() >= 8000 {
+                            recorder.lookback_buffer.pop_front();
                         }
-                        process_audio_samples(&mut recorder, &mono_i16_samples);
+                        recorder.lookback_buffer.push_back(sample);
+                    }
+
+                    if recorder.is_recording {
+                        process_audio_samples(&mut recorder);
                     }
                 }
             },
@@ -312,13 +324,23 @@ fn build_stream_u16(
             config,
             move |data: &[u16], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    if recorder.is_recording {
-                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks(channels) {
-                            let f32_sample = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
-                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    recorder.mono_buffer.clear();
+                    recorder.mono_buffer.reserve(data.len() / channels);
+                    for frame in data.chunks(channels) {
+                        let f32_sample = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
+                        recorder.mono_buffer.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    }
+
+                    for i in 0..recorder.mono_buffer.len() {
+                        let sample = recorder.mono_buffer[i];
+                        if recorder.lookback_buffer.len() >= 8000 {
+                            recorder.lookback_buffer.pop_front();
                         }
-                        process_audio_samples(&mut recorder, &mono_i16_samples);
+                        recorder.lookback_buffer.push_back(sample);
+                    }
+
+                    if recorder.is_recording {
+                        process_audio_samples(&mut recorder);
                     }
                 }
             },
@@ -340,13 +362,23 @@ fn build_stream_i8(
             config,
             move |data: &[i8], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    if recorder.is_recording {
-                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks(channels) {
-                            let f32_sample = frame[0] as f32 / i8::MAX as f32;
-                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    recorder.mono_buffer.clear();
+                    recorder.mono_buffer.reserve(data.len() / channels);
+                    for frame in data.chunks(channels) {
+                        let f32_sample = frame[0] as f32 / i8::MAX as f32;
+                        recorder.mono_buffer.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    }
+
+                    for i in 0..recorder.mono_buffer.len() {
+                        let sample = recorder.mono_buffer[i];
+                        if recorder.lookback_buffer.len() >= 8000 {
+                            recorder.lookback_buffer.pop_front();
                         }
-                        process_audio_samples(&mut recorder, &mono_i16_samples);
+                        recorder.lookback_buffer.push_back(sample);
+                    }
+
+                    if recorder.is_recording {
+                        process_audio_samples(&mut recorder);
                     }
                 }
             },
@@ -368,13 +400,23 @@ fn build_stream_u8(
             config,
             move |data: &[u8], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    if recorder.is_recording {
-                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks(channels) {
-                            let f32_sample = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
-                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    recorder.mono_buffer.clear();
+                    recorder.mono_buffer.reserve(data.len() / channels);
+                    for frame in data.chunks(channels) {
+                        let f32_sample = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
+                        recorder.mono_buffer.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
+                    }
+
+                    for i in 0..recorder.mono_buffer.len() {
+                        let sample = recorder.mono_buffer[i];
+                        if recorder.lookback_buffer.len() >= 8000 {
+                            recorder.lookback_buffer.pop_front();
                         }
-                        process_audio_samples(&mut recorder, &mono_i16_samples);
+                        recorder.lookback_buffer.push_back(sample);
+                    }
+
+                    if recorder.is_recording {
+                        process_audio_samples(&mut recorder);
                     }
                 }
             },
@@ -386,11 +428,6 @@ fn build_stream_u8(
 }
 
 pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<String, String> {
-    {
-        let mut active_stream = ACTIVE_STREAM.lock().unwrap();
-        *active_stream = None;
-    }
-
     let mut recorder = recorder_state.lock().map_err(|e| e.to_string())?;
     if !recorder.is_recording {
         return Err("録音中ではありません".to_string());
@@ -441,8 +478,8 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("wav"))
             .collect();
 
-        // 作成日時でソート
-        files.sort_by_key(|e| e.metadata().and_then(|m| m.created()).ok());
+        // ファイル名に含まれるタイムスタンプでソート（recording_YYYYMMDD_HHMMSS.wav）
+        files.sort_by_key(|e| e.file_name());
 
         if files.len() > 3 {
             let num_to_delete = files.len() - 3;
