@@ -31,3 +31,8 @@ pub fn start_recording(
 pub fn stop_recording(recorder: State<Arc<Mutex<AudioRecorder>>>) -> Result<String, String> {
     audio_recorder::stop_recording(recorder.inner().clone())
 }
+
+#[tauri::command]
+pub fn get_recording_audio(path: String) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| format!("ファイル読み込み失敗: {}", e))
+}

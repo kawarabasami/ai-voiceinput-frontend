@@ -6,12 +6,13 @@ let idCounter = 0;
 export function useHistory() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
-  const addItem = useCallback((originalText: string): HistoryItem => {
+  const addItem = useCallback((originalText: string, recordingPath?: string): HistoryItem => {
     const item: HistoryItem = {
       id: `${Date.now()}-${++idCounter}`,
       timestamp: new Date().toISOString(),
       originalText,
       correctedText: "",
+      recordingPath,
     };
     setHistory((prev) => [item, ...prev]);
     return item;

@@ -1,8 +1,10 @@
 use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Manager};
 use webrtc_vad::{Vad, VadMode, SampleRate};
+use chrono::Local;
+use std::fs;
 
 // Vad is a C struct wrapper, we need to explicitly allow it to be sent across threads if wrapped in Mutex
 pub struct SendVad(pub Vad);
@@ -341,7 +343,17 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
         return Err("録音データが空です".to_string());
     }
 
-    let temp_path = std::env::temp_dir().join("voice_input_temp.wav");
+    // 保存先ディレクトリの決定
+    let app_handle = recorder.app_handle.clone().ok_or("AppHandleが見つかりません")?;
+    let app_data_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let recordings_dir = app_data_dir.join("recordings");
+    fs::create_dir_all(&recordings_dir).map_err(|e| format!("ディレクトリ作成失敗: {}", e))?;
+
+    // ファイル名の生成
+    let timestamp = Local::now().format("%Y%m%d_%H%M%S").to_string();
+    let filename = format!("recording_{}.wav", timestamp);
+    let file_path = recordings_dir.join(filename);
+
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -350,7 +362,7 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
     };
 
     let mut writer =
-        hound::WavWriter::create(&temp_path, spec).map_err(|e| format!("WAV作成失敗: {}", e))?;
+        hound::WavWriter::create(&file_path, spec).map_err(|e| format!("WAV作成失敗: {}", e))?;
 
     for &sample in &buffer {
         writer
@@ -359,7 +371,25 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
     }
     writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;
 
-    Ok(temp_path.to_string_lossy().to_string())
+    // 古い録音データの削除（直近3回分を残す）
+    if let Ok(entries) = fs::read_dir(&recordings_dir) {
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("wav"))
+            .collect();
+
+        // 作成日時でソート
+        files.sort_by_key(|e| e.metadata().and_then(|m| m.created()).ok());
+
+        if files.len() > 3 {
+            let num_to_delete = files.len() - 3;
+            for i in 0..num_to_delete {
+                let _ = fs::remove_file(files[i].path());
+            }
+        }
+    }
+
+    Ok(file_path.to_string_lossy().to_string())
 }
 
 pub fn get_input_devices() -> Result<Vec<(usize, String)>, String> {

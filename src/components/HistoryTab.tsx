@@ -72,6 +72,37 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
             )}
           </div>
           <div className="history-actions">
+            {item.recordingPath && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={async () => {
+                  try {
+                    onStatusChange("音声を読み込み中...", "#4a9eff");
+                    const bytes = await invoke<number[]>("get_recording_audio", {
+                      path: item.recordingPath!,
+                    });
+                    const blob = new Blob([new Uint8Array(bytes)], { type: "audio/wav" });
+                    const url = URL.createObjectURL(blob);
+                    const audio = new Audio(url);
+                    await audio.play();
+                    onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888");
+                  } catch (e) {
+                    console.error("再生失敗:", e);
+                    onStatusChange(
+                      "音声ファイルが見つかりません（削除された可能性があります）",
+                      "#f44336"
+                    );
+                    setTimeout(
+                      () => onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888"),
+                      3000
+                    );
+                  }
+                }}
+                title="録音を再生する"
+              >
+                ▶ 再生
+              </button>
+            )}
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => handleCopy(item)}

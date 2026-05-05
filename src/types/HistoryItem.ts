@@ -3,4 +3,5 @@ export interface HistoryItem {
   timestamp: string; // ISO8601
   originalText: string;
   correctedText: string; // 空文字の場合は未校正
+  recordingPath?: string;
 }
