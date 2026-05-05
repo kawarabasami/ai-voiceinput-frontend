@@ -15,7 +15,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .manage(recorder_state)
+        .manage(recorder_state.clone())
         .invoke_handler(tauri::generate_handler![
             // audio
             audio::get_microphone_devices,
@@ -35,7 +35,7 @@ pub fn run() {
             config::show_main_window,
             config::hide_main_window,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // システムトレイ設定
             tray::setup_tray(app.handle())?;
 
@@ -58,6 +58,17 @@ pub fn run() {
 
             // グローバルショートカット設定（Ctrl+Win）
             shortcut::setup_global_shortcut(app.handle());
+
+            // オーディオストリームのプリウォーム（起動時にデバイスを開いておく）
+            let recorder_state_prewarm = recorder_state.clone();
+            let mic_device_num = config.microphone_device_number;
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = audio_recorder::ensure_stream(recorder_state_prewarm, mic_device_num) {
+                    eprintln!("[Setup] オーディオプリウォーム失敗: {}", e);
+                } else {
+                    println!("[Setup] オーディオプリウォーム完了");
+                }
+            });
 
             // オーバーレイウィンドウの位置を画面下部中央に設定
             if let Some(overlay) = app.get_webview_window("overlay") {

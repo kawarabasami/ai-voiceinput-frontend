@@ -34,6 +34,7 @@ function App() {
 
   // 処理中の重複を防ぐ ref
   const isProcessingRef = useRef(false);
+  const isRecordingRef = useRef(false);
 
   const setStatus = (text: string, color: string) => {
     setStatusText(text);
@@ -57,15 +58,18 @@ function App() {
   useEffect(() => {
     // shortcut-down: 録音開始
     const unlistenDown = listen("shortcut-down", async () => {
+      if (isRecordingRef.current) return;
+      isRecordingRef.current = true;
       console.log("[App] shortcut-down received");
-      if (isProcessingRef.current) return;
       
       const currentConfig = configRef.current;
+      // UIを即座に更新（バックエンドの応答を待たない）
+      setStatus("録音中...", "#f44336");
+
       try {
         await invoke("start_recording", {
           deviceNumber: currentConfig.microphoneDeviceNumber,
         });
-        setStatus("録音中...", "#f44336");
       } catch (e) {
         console.error("[App] 録音開始失敗:", e);
         setStatus(`録音開始失敗: ${e}`, "#f44336");
@@ -75,11 +79,10 @@ function App() {
 
     // shortcut-up: 録音停止 → 文字起こし → (自動校正) → 入力
     const handleRecordingStop = async () => {
-      const currentConfig = configRef.current;
-      console.log("[App] recording stop triggered, auto-correct enabled:", currentConfig.isAutoCorrectionEnabled);
-      
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
+
+      const currentConfig = configRef.current;
 
       try {
         // 録音終了後の待機
@@ -92,8 +95,11 @@ function App() {
         let wavPath: string;
         try {
           wavPath = await invoke<string>("stop_recording");
+          // 録音が停止した時点で、次の録音を受け入れ可能にする
+          isRecordingRef.current = false;
         } catch (e) {
           console.error("[App] 録音停止失敗:", e);
+          isRecordingRef.current = false;
           resetStatus();
           return;
         }
@@ -163,6 +169,7 @@ function App() {
 
     // shortcut-up: 録音停止 → 文字起こし → (自動校正) → 入力
     const unlistenUp = listen("shortcut-up", () => {
+      if (!isRecordingRef.current) return;
       console.log("[App] shortcut-up received");
       handleRecordingStop();
     });

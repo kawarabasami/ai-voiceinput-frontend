@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use tauri::{AppHandle, Manager};
@@ -20,6 +21,7 @@ pub struct AudioRecorder {
     pub silence_history: Vec<i16>,
     pub app_handle: Option<AppHandle>,
     pub vad: SendVad,
+    pub lookback_buffer: VecDeque<i16>,
 }
 
 // cpal::Stream を Send + Sync にするためのラッパー
@@ -28,6 +30,7 @@ unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}
 
 static ACTIVE_STREAM: Mutex<Option<SendStream>> = Mutex::new(None);
+static CURRENT_DEVICE_INDEX: Mutex<Option<usize>> = Mutex::new(None);
 
 impl AudioRecorder {
     pub fn new() -> Self {
@@ -40,6 +43,7 @@ impl AudioRecorder {
             silence_history: Vec::new(),
             app_handle: None,
             vad: SendVad(Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive)),
+            lookback_buffer: VecDeque::with_capacity(8000), // 0.5s at 16kHz
         }
     }
 
@@ -49,14 +53,25 @@ impl AudioRecorder {
     }
 }
 
-pub fn start_recording(
+pub fn ensure_stream(
     recorder_state: Arc<Mutex<AudioRecorder>>,
     device_index: usize,
 ) -> Result<(), String> {
-    let mut recorder = recorder_state.lock().map_err(|e| e.to_string())?;
-    if recorder.is_recording {
-        return Ok(());
+    // 既にストリームが存在し、かつデバイスが同じか確認
+    {
+        let active_stream = ACTIVE_STREAM.lock().unwrap();
+        let current_index = CURRENT_DEVICE_INDEX.lock().unwrap();
+        if active_stream.is_some() && *current_index == Some(device_index) {
+            return Ok(());
+        }
     }
+
+    // デバイスが違う、または未作成の場合は作成
+    let mut active_stream = ACTIVE_STREAM.lock().unwrap();
+    let mut current_index = CURRENT_DEVICE_INDEX.lock().unwrap();
+    
+    // 既存のストリームを明示的にドロップ
+    *active_stream = None;
 
     let host = cpal::default_host();
     let devices: Vec<Device> = host
@@ -73,26 +88,56 @@ pub fn start_recording(
     let config = find_config_16khz(&device)?;
     let sample_format = config.sample_format();
 
-    recorder.buffer.clear();
-    recorder.sample_rate = config.sample_rate().0;
-    recorder.is_recording = true;
+    {
+        let mut recorder = recorder_state.lock().map_err(|e| e.to_string())?;
+        recorder.sample_rate = config.sample_rate().0;
+    }
 
-    let buffer_clone = Arc::clone(&recorder_state);
+    let recorder_state_clone = Arc::clone(&recorder_state);
 
     let stream = match sample_format {
-        SampleFormat::F32 => build_stream::<f32>(&device, &config.into(), buffer_clone),
-        SampleFormat::I16 => build_stream_i16(&device, &config.into(), buffer_clone),
-        SampleFormat::U16 => build_stream_u16(&device, &config.into(), buffer_clone),
-        SampleFormat::I32 => build_stream_i32(&device, &config.into(), buffer_clone),
-        SampleFormat::I8 => build_stream_i8(&device, &config.into(), buffer_clone),
-        SampleFormat::U8 => build_stream_u8(&device, &config.into(), buffer_clone),
+        SampleFormat::F32 => build_stream::<f32>(&device, &config.into(), recorder_state_clone),
+        SampleFormat::I16 => build_stream_i16(&device, &config.into(), recorder_state_clone),
+        SampleFormat::U16 => build_stream_u16(&device, &config.into(), recorder_state_clone),
+        SampleFormat::I32 => build_stream_i32(&device, &config.into(), recorder_state_clone),
+        SampleFormat::I8 => build_stream_i8(&device, &config.into(), recorder_state_clone),
+        SampleFormat::U8 => build_stream_u8(&device, &config.into(), recorder_state_clone),
         _ => Err(format!("サポートされていないサンプルフォーマットです: {:?}", sample_format)),
     }?;
 
     stream.play().map_err(|e| format!("ストリーム開始失敗: {}", e))?;
     
-    let mut active_stream = ACTIVE_STREAM.lock().unwrap();
     *active_stream = Some(SendStream(stream));
+    *current_index = Some(device_index);
+
+    Ok(())
+}
+
+pub fn get_current_device_index() -> Option<usize> {
+    *CURRENT_DEVICE_INDEX.lock().unwrap()
+}
+
+pub fn start_recording(
+    recorder_state: Arc<Mutex<AudioRecorder>>,
+    device_index: usize,
+) -> Result<(), String> {
+    // ストリームの準備（未作成なら作成、作成済みならそのまま）
+    ensure_stream(Arc::clone(&recorder_state), device_index)?;
+
+    let mut recorder = recorder_state.lock().map_err(|e| e.to_string())?;
+    if recorder.is_recording {
+        return Ok(());
+    }
+
+    recorder.buffer.clear();
+    // 遡りバッファを初期データとして入れる
+    let lookback_samples: Vec<i16> = recorder.lookback_buffer.iter().copied().collect();
+    recorder.buffer.extend(lookback_samples);
+    
+    recorder.silent_frames = 0;
+    recorder.vad_buffer.clear();
+    recorder.silence_history.clear();
+    recorder.is_recording = true;
 
     Ok(())
 }
@@ -165,13 +210,22 @@ where
             config,
             move |data: &[T], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    if recorder.is_recording {
-                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks(channels) {
-                            let f32_sample = f32::from(frame[0]);
-                            let i16_sample = (f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
-                            mono_i16_samples.push(i16_sample);
+                    let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
+                    for frame in data.chunks(channels) {
+                        let f32_sample = f32::from(frame[0]);
+                        let i16_sample = (f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                        mono_i16_samples.push(i16_sample);
+                    }
+
+                    // 常に遡りバッファを更新（直近500ms分を保持）
+                    for &sample in &mono_i16_samples {
+                        if recorder.lookback_buffer.len() >= 8000 {
+                            recorder.lookback_buffer.pop_front();
                         }
+                        recorder.lookback_buffer.push_back(sample);
+                    }
+
+                    if recorder.is_recording {
                         process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
@@ -194,11 +248,20 @@ fn build_stream_i16(
             config,
             move |data: &[i16], _| {
                 if let Ok(mut recorder) = state.lock() {
-                    if recorder.is_recording {
-                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
-                        for frame in data.chunks(channels) {
-                            mono_i16_samples.push(frame[0]);
+                    let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
+                    for frame in data.chunks(channels) {
+                        mono_i16_samples.push(frame[0]);
+                    }
+
+                    // 常に遡りバッファを更新
+                    for &sample in &mono_i16_samples {
+                        if recorder.lookback_buffer.len() >= 8000 {
+                            recorder.lookback_buffer.pop_front();
                         }
+                        recorder.lookback_buffer.push_back(sample);
+                    }
+
+                    if recorder.is_recording {
                         process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }

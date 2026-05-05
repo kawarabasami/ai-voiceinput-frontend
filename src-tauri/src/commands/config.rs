@@ -105,6 +105,18 @@ pub fn save_config<R: Runtime>(app: AppHandle<R>, config: AppConfig) -> Result<(
     store.set(CONFIG_KEY, value);
     store.save().map_err(|e| format!("ストア保存失敗: {}", e))?;
 
+    // デバイス変更があった場合などに備えて、ストリームをバックグラウンドで更新しておく
+    let app_handle = app.clone();
+    let mic_device_num = config.microphone_device_number;
+    tauri::async_runtime::spawn(async move {
+        use crate::audio_recorder;
+        use crate::AudioRecorder;
+        use std::sync::{Arc, Mutex};
+        if let Some(state) = app_handle.try_state::<Arc<Mutex<AudioRecorder>>>() {
+            let _ = audio_recorder::ensure_stream(state.inner().clone(), mic_device_num);
+        }
+    });
+
     Ok(())
 }
 

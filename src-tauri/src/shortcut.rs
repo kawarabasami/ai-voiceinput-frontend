@@ -61,7 +61,31 @@ mod windows_hook {
                         println!("[Shortcut] Shortcut Down (Ctrl+Win)");
                         if let Ok(guard) = APP_HANDLE_PTR.lock() {
                             if let Some(wrapper) = &*guard {
-                                let handle = &*wrapper.0;
+                                let handle = unsafe { &*wrapper.0 };
+                                
+                                // UI更新通知の前に、バックエンドで即座に録音を開始する
+                                use crate::audio_recorder;
+                                use crate::AudioRecorder;
+                                use std::sync::{Arc, Mutex};
+                                use tauri::Manager;
+
+                                if let Some(recorder_state) = handle.try_state::<Arc<Mutex<AudioRecorder>>>() {
+                                    // ディスクI/Oを避けるため、ロード済みのインデックスを使用する
+                                    let device_index = audio_recorder::get_current_device_index().unwrap_or(0);
+                                    let _ = audio_recorder::start_recording(recorder_state.inner().clone(), device_index);
+                                }
+
+                                // オーバーレイに直接通知（フロントエンドを介さない最速ルート）
+                                #[derive(Clone, serde::Serialize)]
+                                struct OverlayPayload {
+                                    text: String,
+                                    color: String,
+                                }
+                                let _ = handle.emit("overlay-show", OverlayPayload {
+                                    text: "録音中...".to_string(),
+                                    color: "#f44336".to_string(),
+                                });
+
                                 let _ = handle.emit("shortcut-down", ());
                             }
                         }
