@@ -26,6 +26,7 @@ dependencies = [
  "enigo",
  "hound",
  "reqwest 0.12.28",
+ "ringbuf",
  "serde",
  "serde_json",
  "tauri",
@@ -35,6 +36,7 @@ dependencies = [
  "tauri-plugin-store",
  "tokio",
  "uuid",
+ "webrtc-vad",
  "windows 0.58.0",
 ]
 
@@ -3254,6 +3256,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ringbuf"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79abed428d1fd2a128201cec72c5f6938e2da607c6f3745f769fabea399d950a"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5054,6 +5065,15 @@ dependencies = [
  "pkg-config",
  "soup3-sys",
  "system-deps",
+]
+
+[[package]]
+name = "webrtc-vad"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "39a1e40fd6ca90be95459152a2537f2ba4286ee1b13073f7ebcaa74fc94e3008"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

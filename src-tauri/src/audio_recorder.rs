@@ -1,11 +1,23 @@
 use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
+use tauri::{AppHandle, Emitter};
+use webrtc_vad::{Vad, VadMode, SampleRate};
+
+// Vad is a C struct wrapper, we need to explicitly allow it to be sent across threads if wrapped in Mutex
+pub struct SendVad(pub Vad);
+unsafe impl Send for SendVad {}
+unsafe impl Sync for SendVad {}
 
 pub struct AudioRecorder {
-    is_recording: bool,
-    buffer: Vec<f32>,
-    sample_rate: u32,
+    pub is_recording: bool,
+    pub buffer: Vec<i16>,
+    pub sample_rate: u32,
+    pub silent_frames: u32,
+    pub vad_buffer: Vec<i16>,
+    pub silence_history: Vec<i16>,
+    pub app_handle: Option<AppHandle>,
+    pub vad: SendVad,
 }
 
 // cpal::Stream を Send + Sync にするためのラッパー
@@ -21,6 +33,11 @@ impl AudioRecorder {
             is_recording: false,
             buffer: Vec::new(),
             sample_rate: 16000,
+            silent_frames: 0,
+            vad_buffer: Vec::new(),
+            silence_history: Vec::new(),
+            app_handle: None,
+            vad: SendVad(Vad::new_with_rate_and_mode(SampleRate::Rate16kHz, VadMode::Aggressive)),
         }
     }
 
@@ -96,6 +113,41 @@ fn find_config_16khz(device: &Device) -> Result<SupportedStreamConfig, String> {
         .map_err(|e| format!("デフォルト設定取得失敗: {}", e))
 }
 
+fn process_audio_samples(recorder: &mut AudioRecorder, samples: &[i16]) {
+    for &sample in samples {
+        recorder.vad_buffer.push(sample);
+    }
+
+    while recorder.vad_buffer.len() >= 480 {
+        let frame: Vec<i16> = recorder.vad_buffer.drain(..480).collect();
+        let is_voice = recorder.vad.0.is_voice_segment(&frame).unwrap_or(true);
+        
+        if is_voice {
+            // 有音フレームになったら、直近の無音履歴（リーディングマージン）を保存バッファに追加
+            if !recorder.silence_history.is_empty() {
+                recorder.buffer.extend_from_slice(&recorder.silence_history);
+                recorder.silence_history.clear();
+            }
+            
+            recorder.buffer.extend_from_slice(&frame);
+            recorder.silent_frames = 0;
+        } else {
+            recorder.silent_frames += 1;
+            
+            // 無音の開始後300ms(10フレーム)はトレイリングマージンとして保存バッファに残す
+            if recorder.silent_frames <= 10 {
+                recorder.buffer.extend_from_slice(&frame);
+            } else {
+                // それ以降の無音は、将来のリーディングマージンとして履歴に保持(最大10フレーム=300ms)
+                recorder.silence_history.extend_from_slice(&frame);
+                if recorder.silence_history.len() > 480 * 10 {
+                    recorder.silence_history.drain(0..480);
+                }
+            }
+        }
+    }
+}
+
 fn build_stream<T>(
     device: &Device,
     config: &cpal::StreamConfig,
@@ -112,9 +164,13 @@ where
             move |data: &[T], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
                         for frame in data.chunks(channels) {
-                            recorder.buffer.push(f32::from(frame[0]));
+                            let f32_sample = f32::from(frame[0]);
+                            let i16_sample = (f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                            mono_i16_samples.push(i16_sample);
                         }
+                        process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
             },
@@ -137,9 +193,11 @@ fn build_stream_i16(
             move |data: &[i16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
                         for frame in data.chunks(channels) {
-                            recorder.buffer.push(frame[0] as f32 / i16::MAX as f32);
+                            mono_i16_samples.push(frame[0]);
                         }
+                        process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
             },
@@ -162,9 +220,12 @@ fn build_stream_i32(
             move |data: &[i32], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
                         for frame in data.chunks(channels) {
-                            recorder.buffer.push(frame[0] as f32 / i32::MAX as f32);
+                            let f32_sample = frame[0] as f32 / i32::MAX as f32;
+                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
                         }
+                        process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
             },
@@ -187,10 +248,12 @@ fn build_stream_u16(
             move |data: &[u16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
                         for frame in data.chunks(channels) {
-                            let s = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
-                            recorder.buffer.push(s);
+                            let f32_sample = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
+                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
                         }
+                        process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
             },
@@ -213,9 +276,12 @@ fn build_stream_i8(
             move |data: &[i8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
                         for frame in data.chunks(channels) {
-                            recorder.buffer.push(frame[0] as f32 / i8::MAX as f32);
+                            let f32_sample = frame[0] as f32 / i8::MAX as f32;
+                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
                         }
+                        process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
             },
@@ -238,10 +304,12 @@ fn build_stream_u8(
             move |data: &[u8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let mut mono_i16_samples = Vec::with_capacity(data.len() / channels);
                         for frame in data.chunks(channels) {
-                            let s = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
-                            recorder.buffer.push(s);
+                            let f32_sample = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
+                            mono_i16_samples.push((f32_sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16);
                         }
+                        process_audio_samples(&mut recorder, &mono_i16_samples);
                     }
                 }
             },
@@ -284,10 +352,9 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
     let mut writer =
         hound::WavWriter::create(&temp_path, spec).map_err(|e| format!("WAV作成失敗: {}", e))?;
 
-    for sample in &buffer {
-        let s = (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+    for &sample in &buffer {
         writer
-            .write_sample(s)
+            .write_sample(sample)
             .map_err(|e| format!("WAV書き込み失敗: {}", e))?;
     }
     writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;

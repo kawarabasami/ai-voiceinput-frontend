@@ -9,6 +9,9 @@ export interface AppConfig {
   microphoneDeviceNumber: number;
   theme: "dark" | "light";
   startMinimized: boolean;
+  whisperLanguageFixed: boolean;
+  whisperInitialPromptEnabled: boolean;
+  whisperInitialPrompt: string;
 }
 
 export const DEFAULT_CONFIG: AppConfig = {
@@ -23,4 +26,7 @@ export const DEFAULT_CONFIG: AppConfig = {
   microphoneDeviceNumber: 0,
   theme: "dark",
   startMinimized: false,
+  whisperLanguageFixed: false,
+  whisperInitialPromptEnabled: false,
+  whisperInitialPrompt: "",
 };

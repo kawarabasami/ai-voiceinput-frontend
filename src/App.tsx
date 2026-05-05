@@ -74,9 +74,9 @@ function App() {
     });
 
     // shortcut-up: 録音停止 → 文字起こし → (自動校正) → 入力
-    const unlistenUp = listen("shortcut-up", async () => {
+    const handleRecordingStop = async () => {
       const currentConfig = configRef.current;
-      console.log("[App] shortcut-up received, auto-correct enabled:", currentConfig.isAutoCorrectionEnabled);
+      console.log("[App] recording stop triggered, auto-correct enabled:", currentConfig.isAutoCorrectionEnabled);
       
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
@@ -106,6 +106,9 @@ function App() {
             apiBaseUrl: currentConfig.apiBaseUrl,
             model: currentConfig.whisperModel,
             filePath: wavPath,
+            languageFixed: currentConfig.whisperLanguageFixed,
+            initialPromptEnabled: currentConfig.whisperInitialPromptEnabled,
+            initialPrompt: currentConfig.whisperInitialPrompt,
           });
         } catch (e) {
           console.error("[App] 文字起こし失敗:", e);
@@ -156,6 +159,12 @@ function App() {
       } finally {
         isProcessingRef.current = false;
       }
+    };
+
+    // shortcut-up: 録音停止 → 文字起こし → (自動校正) → 入力
+    const unlistenUp = listen("shortcut-up", () => {
+      console.log("[App] shortcut-up received");
+      handleRecordingStop();
     });
 
     return () => {

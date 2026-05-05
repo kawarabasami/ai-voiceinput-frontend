@@ -23,6 +23,8 @@ tokio = { version = "1", features = ["full"] }
 cpal = "0.15"
 hound = "3"
 reqwest = { version = "0.12", features = ["multipart", "json"] }
+webrtc-vad = "0.4.0"
+ringbuf = "0.3"
 enigo = "0.2"
 arboard = "3"
 uuid = { version = "1", features = ["v4"] }

@@ -110,6 +110,49 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ config, onSave }) => {
         />
       </div>
 
+      <div className="settings-group settings-checkbox">
+        <label className="checkbox-label" htmlFor="whisper-language-fixed">
+          <input
+            id="whisper-language-fixed"
+            type="checkbox"
+            checked={form.whisperLanguageFixed}
+            onChange={(e) =>
+              setForm({ ...form, whisperLanguageFixed: e.target.checked })
+            }
+          />
+          Whisperの言語を日本語(ja)に固定する
+        </label>
+      </div>
+
+      <div className="settings-group settings-checkbox">
+        <label className="checkbox-label" htmlFor="whisper-initial-prompt-enabled">
+          <input
+            id="whisper-initial-prompt-enabled"
+            type="checkbox"
+            checked={form.whisperInitialPromptEnabled}
+            onChange={(e) =>
+              setForm({ ...form, whisperInitialPromptEnabled: e.target.checked })
+            }
+          />
+          Whisperに初期プロンプトを送信する
+        </label>
+      </div>
+
+      {form.whisperInitialPromptEnabled && (
+        <div className="settings-group">
+          <label className="settings-label" htmlFor="whisper-initial-prompt">
+            初期プロンプト (例: 専門用語や表記揺れの指定)
+          </label>
+          <textarea
+            id="whisper-initial-prompt"
+            className="textarea"
+            value={form.whisperInitialPrompt}
+            onChange={(e) => setForm({ ...form, whisperInitialPrompt: e.target.value })}
+            rows={2}
+          />
+        </div>
+      )}
+
       <div className="settings-group">
         <label className="settings-label" htmlFor="llm-models">
           LLMモデル一覧（カンマ区切り）

@@ -33,6 +33,9 @@ pub async fn transcribe_audio(
     api_base_url: String,
     model: String,
     file_path: String,
+    language_fixed: bool,
+    initial_prompt_enabled: bool,
+    initial_prompt: String,
 ) -> Result<String, String> {
     let path = Path::new(&file_path);
     if !path.exists() {
@@ -52,10 +55,17 @@ pub async fn transcribe_audio(
         .mime_str("audio/wav")
         .map_err(|e| format!("MIMEタイプ設定失敗: {}", e))?;
 
-    let form = multipart::Form::new()
+    let mut form = multipart::Form::new()
         .part("file", part)
-        .text("model", model)
-        .text("language", "ja");
+        .text("model", model);
+
+    if language_fixed {
+        form = form.text("language", "ja");
+    }
+
+    if initial_prompt_enabled && !initial_prompt.is_empty() {
+        form = form.text("prompt", initial_prompt);
+    }
 
     let url = format!("{}/audio/transcriptions", api_base_url.trim_end_matches('/'));
 

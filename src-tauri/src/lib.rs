@@ -38,6 +38,13 @@ pub fn run() {
             // システムトレイ設定
             tray::setup_tray(app.handle())?;
 
+            if let Some(state) = app.handle().try_state::<Arc<Mutex<AudioRecorder>>>() {
+                if let Ok(mut s) = state.inner().lock() {
+                    s.app_handle = Some(app.handle().clone());
+                }
+            }
+
+
             // 設定の読み込み
             let config = config::load_config(app.handle().clone()).unwrap_or_default();
 

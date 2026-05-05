@@ -25,6 +25,12 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default)]
     pub start_minimized: bool,
+    #[serde(default)]
+    pub whisper_language_fixed: bool,
+    #[serde(default)]
+    pub whisper_initial_prompt_enabled: bool,
+    #[serde(default)]
+    pub whisper_initial_prompt: String,
 }
 
 fn default_theme() -> String {
@@ -63,6 +69,9 @@ impl Default for AppConfig {
             microphone_device_number: 0,
             theme: default_theme(),
             start_minimized: false,
+            whisper_language_fixed: false,
+            whisper_initial_prompt_enabled: false,
+            whisper_initial_prompt: "".to_string(),
         }
     }
 }
