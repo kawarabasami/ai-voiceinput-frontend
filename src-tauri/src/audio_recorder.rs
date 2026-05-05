@@ -33,6 +33,10 @@ unsafe impl Sync for SendStream {}
 static ACTIVE_STREAM: Mutex<Option<SendStream>> = Mutex::new(None);
 static CURRENT_DEVICE_INDEX: Mutex<Option<usize>> = Mutex::new(None);
 
+pub fn get_current_device_index() -> Option<usize> {
+    *CURRENT_DEVICE_INDEX.lock().unwrap()
+}
+
 impl AudioRecorder {
     pub fn new() -> Self {
         Self {

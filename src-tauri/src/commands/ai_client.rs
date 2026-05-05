@@ -1,6 +1,7 @@
 use reqwest::multipart;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChatMessage {
@@ -28,8 +29,40 @@ struct ChatResponseMessage {
     content: String,
 }
 
+fn validate_api_base_url(api_base_url: &str) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(api_base_url)
+        .map_err(|e| format!("API Base URLが不正です: {}", e))?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(()),
+        _ => Err("API Base URLはhttp/httpsのみ許可されています".to_string()),
+    }
+}
+
+fn resolve_recording_path(app_handle: &AppHandle, file_path: &str) -> Result<PathBuf, String> {
+    let app_data_dir = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    let recordings_dir = app_data_dir.join("recordings");
+    let recordings_dir = std::fs::canonicalize(&recordings_dir)
+        .map_err(|e| format!("録音ディレクトリ取得失敗: {}", e))?;
+
+    let requested = PathBuf::from(file_path);
+    let resolved = if requested.is_absolute() {
+        requested
+    } else {
+        recordings_dir.join(requested)
+    };
+    let resolved = std::fs::canonicalize(&resolved)
+        .map_err(|e| format!("音声ファイル読み込み失敗: {}", e))?;
+
+    if !resolved.starts_with(&recordings_dir) {
+        return Err("録音ディレクトリ外のファイルは読み込めません".to_string());
+    }
+
+    Ok(resolved)
+}
+
 #[tauri::command]
 pub async fn transcribe_audio(
+    app_handle: AppHandle,
     api_base_url: String,
     model: String,
     file_path: String,
@@ -37,7 +70,9 @@ pub async fn transcribe_audio(
     initial_prompt_enabled: bool,
     initial_prompt: String,
 ) -> Result<String, String> {
-    let path = Path::new(&file_path);
+    validate_api_base_url(&api_base_url)?;
+    let safe_path = resolve_recording_path(&app_handle, &file_path)?;
+    let path = Path::new(&safe_path);
     if !path.exists() {
         return Err(format!("音声ファイルが見つかりません: {}", file_path));
     }
@@ -98,6 +133,7 @@ pub async fn correct_text(
     text: String,
     prompt: String,
 ) -> Result<String, String> {
+    validate_api_base_url(&api_base_url)?;
     let messages = vec![
         ChatMessage {
             role: "system".to_string(),
@@ -118,6 +154,7 @@ pub async fn chat_completion(
     model: String,
     messages: Vec<ChatMessage>,
 ) -> Result<String, String> {
+    validate_api_base_url(&api_base_url)?;
     chat_completion_inner(api_base_url, model, messages).await
 }
 

@@ -65,16 +65,7 @@ function App() {
       const currentConfig = configRef.current;
       // UIを即座に更新（バックエンドの応答を待たない）
       setStatus("録音中...", "#f44336");
-
-      try {
-        await invoke("start_recording", {
-          deviceNumber: currentConfig.microphoneDeviceNumber,
-        });
-      } catch (e) {
-        console.error("[App] 録音開始失敗:", e);
-        setStatus(`録音開始失敗: ${e}`, "#f44336");
-        setTimeout(resetStatus, 3000);
-      }
+      void currentConfig;
     });
 
     // shortcut-up: 録音停止 → 文字起こし → (自動校正) → 入力

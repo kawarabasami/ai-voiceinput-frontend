@@ -63,6 +63,20 @@ mod windows_hook {
                             if let Some(wrapper) = &*guard {
                                 let handle = unsafe { &*wrapper.0 };
                                 
+                                // 録音開始はバックエンド側で先行し、UIイベント配信より先に走らせる
+                                use crate::audio_recorder;
+                                use crate::AudioRecorder;
+                                use std::sync::{Arc, Mutex};
+                                use tauri::Manager;
+
+                                if let Some(recorder_state) = handle.try_state::<Arc<Mutex<AudioRecorder>>>() {
+                                    let recorder_state = recorder_state.inner().clone();
+                                    let device_index = audio_recorder::get_current_device_index().unwrap_or(0);
+                                    tauri::async_runtime::spawn(async move {
+                                        let _ = audio_recorder::start_recording(recorder_state, device_index);
+                                    });
+                                }
+                                
                                 // オーバーレイに直接通知（フロントエンドを介さない最速ルート）
                                 #[derive(Clone, serde::Serialize)]
                                 struct OverlayPayload {
