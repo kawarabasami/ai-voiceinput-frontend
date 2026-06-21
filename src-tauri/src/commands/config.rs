@@ -19,6 +19,8 @@ pub struct AppConfig {
     pub post_recording_delay_ms: u64,
     #[serde(default)]
     pub is_auto_correction_enabled: bool,
+    #[serde(default = "default_silence_trim_enabled")]
+    pub is_silence_trim_enabled: bool,
     #[serde(default)]
     pub microphone_device_number: usize,
     #[serde(default = "default_theme")]
@@ -49,6 +51,9 @@ fn default_correction_prompt() -> String {
 fn default_post_recording_delay_ms() -> u64 {
     500
 }
+fn default_silence_trim_enabled() -> bool {
+    true
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -60,6 +65,7 @@ impl Default for AppConfig {
             correction_prompt: default_correction_prompt(),
             post_recording_delay_ms: default_post_recording_delay_ms(),
             is_auto_correction_enabled: false,
+            is_silence_trim_enabled: default_silence_trim_enabled(),
             microphone_device_number: 0,
             theme: default_theme(),
             start_minimized: false,
@@ -91,8 +97,7 @@ pub fn save_config<R: Runtime>(app: AppHandle<R>, config: AppConfig) -> Result<(
         .store("config.json")
         .map_err(|e| format!("ストア開錠失敗: {}", e))?;
 
-    let value =
-        serde_json::to_value(&config).map_err(|e| format!("シリアライズ失敗: {}", e))?;
+    let value = serde_json::to_value(&config).map_err(|e| format!("シリアライズ失敗: {}", e))?;
     store.set(CONFIG_KEY, value);
     store.save().map_err(|e| format!("ストア保存失敗: {}", e))?;
 

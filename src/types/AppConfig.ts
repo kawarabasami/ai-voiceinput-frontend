@@ -6,6 +6,7 @@ export interface AppConfig {
   correctionPrompt: string;
   postRecordingDelayMs: number;
   isAutoCorrectionEnabled: boolean;
+  isSilenceTrimEnabled: boolean;
   microphoneDeviceNumber: number;
   theme: "dark" | "light";
   startMinimized: boolean;
@@ -20,6 +21,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     "以下の音声認識されたテキストの誤字脱字を修正し、自然な日本語にしてください。修正後のテキストのみを出力してください。",
   postRecordingDelayMs: 500,
   isAutoCorrectionEnabled: false,
+  isSilenceTrimEnabled: true,
   microphoneDeviceNumber: 0,
   theme: "dark",
   startMinimized: false,

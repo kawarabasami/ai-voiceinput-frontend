@@ -1,8 +1,8 @@
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, SampleFormat, SupportedStreamConfig};
 
 pub struct AudioRecorder {
     is_recording: bool,
@@ -116,7 +116,10 @@ pub fn start_recording(
         SampleFormat::I32 => build_stream_i32(&device, &config.into(), buffer_clone),
         SampleFormat::I8 => build_stream_i8(&device, &config.into(), buffer_clone),
         SampleFormat::U8 => build_stream_u8(&device, &config.into(), buffer_clone),
-        _ => Err(format!("サポートされていないサンプルフォーマットです: {:?}", sample_format)),
+        _ => Err(format!(
+            "サポートされていないサンプルフォーマットです: {:?}",
+            sample_format
+        )),
     }?;
 
     drop(recorder);
@@ -128,7 +131,7 @@ pub fn start_recording(
         }
         return Err(format!("ストリーム開始失敗: {}", e));
     }
-    
+
     let mut active_stream = ACTIVE_STREAM.lock().unwrap();
     *active_stream = Some(SendStream(stream));
     drop(active_stream);
@@ -383,9 +386,14 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
             .write_sample(s)
             .map_err(|e| format!("WAV書き込み失敗: {}", e))?;
     }
-    writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;
+    writer
+        .finalize()
+        .map_err(|e| format!("WAV確定失敗: {}", e))?;
     if let Err(e) = cleanup_old_recordings(&temp_path) {
-        eprintln!("[AudioRecorder] 古い録音ファイルのクリーンアップに失敗しました: {}", e);
+        eprintln!(
+            "[AudioRecorder] 古い録音ファイルのクリーンアップに失敗しました: {}",
+            e
+        );
     }
 
     Ok(temp_path.to_string_lossy().to_string())
@@ -397,8 +405,7 @@ fn recordings_dir() -> PathBuf {
 
 fn recording_path() -> Result<PathBuf, String> {
     let dir = recordings_dir();
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("録音ディレクトリの作成失敗: {}", e))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("録音ディレクトリの作成失敗: {}", e))?;
     Ok(dir.join(format!("voice_input_{}.wav", uuid::Uuid::new_v4())))
 }
 
@@ -433,6 +440,151 @@ fn cleanup_old_recordings(current_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+pub fn trim_recording_silence(path: String) -> Result<String, String> {
+    const FRAME_MS: usize = 20;
+    const MIN_SILENCE_MS: usize = 350;
+    const PADDING_MS: usize = 120;
+    const MIN_THRESHOLD: f32 = 0.010;
+    const MAX_THRESHOLD: f32 = 0.040;
+
+    let requested_path = PathBuf::from(path);
+    let wav_path = requested_path
+        .canonicalize()
+        .map_err(|e| format!("Audio file path resolve failed: {}", e))?;
+    let temp_dir = recordings_dir()
+        .canonicalize()
+        .map_err(|e| format!("Recordings directory resolve failed: {}", e))?;
+    let file_name = wav_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid audio file name".to_string())?;
+
+    if !wav_path.starts_with(&temp_dir)
+        || !file_name.starts_with("voice_input_")
+        || !file_name.ends_with(".wav")
+    {
+        return Err("Audio file is outside the allowed recordings directory".to_string());
+    }
+
+    let mut reader =
+        hound::WavReader::open(&wav_path).map_err(|e| format!("WAV read failed: {}", e))?;
+    let spec = reader.spec();
+
+    if spec.channels != 1
+        || spec.sample_format != hound::SampleFormat::Int
+        || spec.bits_per_sample != 16
+    {
+        return Err("Unsupported WAV format for silence trimming".to_string());
+    }
+
+    let samples = reader
+        .samples::<i16>()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("WAV sample read failed: {}", e))?;
+    drop(reader);
+
+    if samples.is_empty() {
+        return Ok(wav_path.to_string_lossy().to_string());
+    }
+
+    let sample_rate = spec.sample_rate as usize;
+    let frame_size = (sample_rate * FRAME_MS / 1000).max(1);
+    let min_silence_samples = sample_rate * MIN_SILENCE_MS / 1000;
+    let padding_samples = sample_rate * PADDING_MS / 1000;
+
+    let frame_rms = samples
+        .chunks(frame_size)
+        .map(|frame| {
+            let sum = frame
+                .iter()
+                .map(|sample| {
+                    let normalized = *sample as f32 / i16::MAX as f32;
+                    normalized * normalized
+                })
+                .sum::<f32>();
+            (sum / frame.len() as f32).sqrt()
+        })
+        .collect::<Vec<_>>();
+
+    let mut sorted_rms = frame_rms.clone();
+    sorted_rms.sort_by(|a, b| a.total_cmp(b));
+    let noise_floor = sorted_rms[sorted_rms.len() / 5];
+    let threshold = (noise_floor * 3.0).clamp(MIN_THRESHOLD, MAX_THRESHOLD);
+
+    let mut ranges = Vec::<(usize, usize)>::new();
+    let mut current_start: Option<usize> = None;
+
+    for (frame_index, rms) in frame_rms.iter().enumerate() {
+        if *rms >= threshold {
+            if current_start.is_none() {
+                current_start = Some(frame_index * frame_size);
+            }
+        } else if let Some(start) = current_start.take() {
+            ranges.push((start, (frame_index * frame_size).min(samples.len())));
+        }
+    }
+
+    if let Some(start) = current_start {
+        ranges.push((start, samples.len()));
+    }
+
+    if ranges.is_empty() {
+        return Ok(wav_path.to_string_lossy().to_string());
+    }
+
+    let padded_ranges = ranges
+        .into_iter()
+        .map(|(start, end)| {
+            (
+                start.saturating_sub(padding_samples),
+                (end + padding_samples).min(samples.len()),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut merged_ranges = Vec::<(usize, usize)>::new();
+    for (start, end) in padded_ranges {
+        if let Some((_, previous_end)) = merged_ranges.last_mut() {
+            if start.saturating_sub(*previous_end) < min_silence_samples {
+                *previous_end = (*previous_end).max(end);
+                continue;
+            }
+        }
+        merged_ranges.push((start, end));
+    }
+
+    let trimmed_samples = merged_ranges
+        .iter()
+        .flat_map(|(start, end)| samples[*start..*end].iter().copied())
+        .collect::<Vec<_>>();
+
+    if trimmed_samples.len() >= samples.len() {
+        return Ok(wav_path.to_string_lossy().to_string());
+    }
+
+    let temp_path = wav_path.with_extension("trimmed.tmp.wav");
+    {
+        let mut writer = hound::WavWriter::create(&temp_path, spec)
+            .map_err(|e| format!("Trimmed WAV create failed: {}", e))?;
+        for sample in trimmed_samples {
+            writer
+                .write_sample(sample)
+                .map_err(|e| format!("Trimmed WAV write failed: {}", e))?;
+        }
+        writer
+            .finalize()
+            .map_err(|e| format!("Trimmed WAV finalize failed: {}", e))?;
+    }
+
+    std::fs::copy(&temp_path, &wav_path).map_err(|e| {
+        let _ = std::fs::remove_file(&temp_path);
+        format!("Trimmed WAV copy failed: {}", e)
+    })?;
+    let _ = std::fs::remove_file(&temp_path);
+
+    Ok(wav_path.to_string_lossy().to_string())
 }
 
 pub fn get_recording_audio(path: String) -> Result<Vec<u8>, String> {
