@@ -274,7 +274,7 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
         return Err("録音データが空です".to_string());
     }
 
-    let temp_path = recording_path();
+    let temp_path = recording_path()?;
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -292,13 +292,22 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
             .map_err(|e| format!("WAV書き込み失敗: {}", e))?;
     }
     writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;
-    cleanup_old_recordings(&temp_path)?;
+    if let Err(e) = cleanup_old_recordings(&temp_path) {
+        eprintln!("[AudioRecorder] 古い録音ファイルのクリーンアップに失敗しました: {}", e);
+    }
 
     Ok(temp_path.to_string_lossy().to_string())
 }
 
-fn recording_path() -> PathBuf {
-    std::env::temp_dir().join(format!("voice_input_{}.wav", uuid::Uuid::new_v4()))
+fn recordings_dir() -> PathBuf {
+    std::env::temp_dir().join("voice_input_app")
+}
+
+fn recording_path() -> Result<PathBuf, String> {
+    let dir = recordings_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("録音ディレクトリの作成失敗: {}", e))?;
+    Ok(dir.join(format!("voice_input_{}.wav", uuid::Uuid::new_v4())))
 }
 
 fn cleanup_old_recordings(current_path: &Path) -> Result<(), String> {
@@ -339,9 +348,9 @@ pub fn get_recording_audio(path: String) -> Result<Vec<u8>, String> {
     let canonical_path = requested_path
         .canonicalize()
         .map_err(|e| format!("録音ファイルの解決失敗: {}", e))?;
-    let temp_dir = std::env::temp_dir()
+    let temp_dir = recordings_dir()
         .canonicalize()
-        .map_err(|e| format!("一時ディレクトリの解決失敗: {}", e))?;
+        .map_err(|e| format!("録音ディレクトリの解決失敗: {}", e))?;
     let file_name = canonical_path
         .file_name()
         .and_then(|name| name.to_str())

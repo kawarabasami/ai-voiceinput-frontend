@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HistoryItem } from "../types/HistoryItem";
 import { AppConfig } from "../types/AppConfig";
@@ -18,6 +18,7 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
 }) => {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
+  const activeAudioIdRef = useRef<string | null>(null);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
 
   const cleanupCurrentAudio = () => {
@@ -27,8 +28,21 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
       URL.revokeObjectURL(currentAudioUrlRef.current);
       currentAudioUrlRef.current = null;
     }
+    activeAudioIdRef.current = null;
     setPlayingAudioId(null);
   };
+
+  useEffect(() => {
+    return () => {
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
+      if (currentAudioUrlRef.current) {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+        currentAudioUrlRef.current = null;
+      }
+      activeAudioIdRef.current = null;
+    };
+  }, []);
 
   const handleCopy = async (item: HistoryItem) => {
     const text = item.correctedText || item.originalText;
@@ -43,16 +57,23 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
     if (!item.audioPath) return;
 
     try {
-      if (playingAudioId === item.id) {
+      if (activeAudioIdRef.current === item.id) {
         cleanupCurrentAudio();
         return;
       }
 
       cleanupCurrentAudio();
+      activeAudioIdRef.current = item.id;
+      setPlayingAudioId(item.id);
 
       const audioBytes = await invoke<number[]>("get_recording_audio", {
         path: item.audioPath,
       });
+
+      if (activeAudioIdRef.current !== item.id) {
+        return;
+      }
+
       const audioUrl = URL.createObjectURL(
         new Blob([new Uint8Array(audioBytes)], { type: "audio/wav" })
       );
@@ -67,7 +88,6 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
         { once: true }
       );
       audio.addEventListener("error", cleanupCurrentAudio, { once: true });
-      setPlayingAudioId(item.id);
       await audio.play();
     } catch (e) {
       cleanupCurrentAudio();

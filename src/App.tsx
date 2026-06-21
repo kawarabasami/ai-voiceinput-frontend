@@ -34,11 +34,20 @@ function App() {
 
   // 処理中の重複を防ぐ ref
   const isProcessingRef = useRef(false);
+  const statusResetTimerRef = useRef<number | null>(null);
+
+  const clearStatusResetTimer = () => {
+    if (statusResetTimerRef.current !== null) {
+      window.clearTimeout(statusResetTimerRef.current);
+      statusResetTimerRef.current = null;
+    }
+  };
 
   const setStatus = (text: string, color: string) => {
+    clearStatusResetTimer();
     setStatusText(text);
     setStatusColor(color);
-    
+
     // 「待機中」を含む場合はオーバーレイを非表示にする
     if (text.includes("待機中")) {
       emit("overlay-hide").catch(() => {});
@@ -49,9 +58,18 @@ function App() {
   };
 
   const resetStatus = () => {
+    clearStatusResetTimer();
     setStatusText("待機中 (Ctrl+Win で録音開始)");
     setStatusColor("#888");
     emit("overlay-hide").catch(() => {});
+  };
+
+  const scheduleResetStatus = (delayMs: number) => {
+    clearStatusResetTimer();
+    statusResetTimerRef.current = window.setTimeout(() => {
+      statusResetTimerRef.current = null;
+      resetStatus();
+    }, delayMs);
   };
 
   useEffect(() => {
@@ -59,25 +77,29 @@ function App() {
     const unlistenDown = listen("shortcut-down", async () => {
       console.log("[App] shortcut-down received");
       if (isProcessingRef.current) return;
-      
+
       const currentConfig = configRef.current;
       try {
-        setStatus("録音中...", "#f44336");
+        setStatus("録音準備中...", "#ff9800");
         await invoke("start_recording", {
           deviceNumber: currentConfig.microphoneDeviceNumber,
         });
+        setStatus("録音中...", "#f44336");
       } catch (e) {
         console.error("[App] 録音開始失敗:", e);
         setStatus(`録音開始失敗: ${e}`, "#f44336");
-        setTimeout(resetStatus, 3000);
+        scheduleResetStatus(3000);
       }
     });
 
     // shortcut-up: 録音停止 → 文字起こし → (自動校正) → 入力
     const unlistenUp = listen("shortcut-up", async () => {
       const currentConfig = configRef.current;
-      console.log("[App] shortcut-up received, auto-correct enabled:", currentConfig.isAutoCorrectionEnabled);
-      
+      console.log(
+        "[App] shortcut-up received, auto-correct enabled:",
+        currentConfig.isAutoCorrectionEnabled,
+      );
+
       if (isProcessingRef.current) return;
       isProcessingRef.current = true;
 
@@ -85,7 +107,7 @@ function App() {
         // 録音終了後の待機
         if (currentConfig.postRecordingDelayMs > 0) {
           await new Promise((resolve) =>
-            setTimeout(resolve, currentConfig.postRecordingDelayMs)
+            setTimeout(resolve, currentConfig.postRecordingDelayMs),
           );
         }
 
@@ -110,13 +132,13 @@ function App() {
         } catch (e) {
           console.error("[App] 文字起こし失敗:", e);
           setStatus(`エラー: ${e}`, "#f44336");
-          setTimeout(resetStatus, 3000);
+          scheduleResetStatus(3000);
           return;
         }
 
         if (!transcribedText?.trim()) {
           setStatus("音声が認識されませんでした", "#ff9800");
-          setTimeout(resetStatus, 3000);
+          scheduleResetStatus(3000);
           return;
         }
 
@@ -152,13 +174,14 @@ function App() {
         await invoke("input_text", { text: textToInput });
 
         setStatus("入力完了", "#4caf50");
-        setTimeout(resetStatus, 3000);
+        scheduleResetStatus(400);
       } finally {
         isProcessingRef.current = false;
       }
     });
 
     return () => {
+      clearStatusResetTimer();
       unlistenDown.then((fn) => fn());
       unlistenUp.then((fn) => fn());
     };
