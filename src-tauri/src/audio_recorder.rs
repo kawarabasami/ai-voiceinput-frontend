@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
@@ -273,7 +274,7 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
         return Err("録音データが空です".to_string());
     }
 
-    let temp_path = std::env::temp_dir().join("voice_input_temp.wav");
+    let temp_path = recording_path();
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -291,8 +292,69 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
             .map_err(|e| format!("WAV書き込み失敗: {}", e))?;
     }
     writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;
+    cleanup_old_recordings(&temp_path)?;
 
     Ok(temp_path.to_string_lossy().to_string())
+}
+
+fn recording_path() -> PathBuf {
+    std::env::temp_dir().join(format!("voice_input_{}.wav", uuid::Uuid::new_v4()))
+}
+
+fn cleanup_old_recordings(current_path: &Path) -> Result<(), String> {
+    let recordings_dir = current_path
+        .parent()
+        .ok_or_else(|| "録音ディレクトリを特定できません".to_string())?;
+    let mut files = std::fs::read_dir(recordings_dir)
+        .map_err(|e| format!("録音ディレクトリの読み取り失敗: {}", e))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("voice_input_") && name.ends_with(".wav"))
+                .unwrap_or(false)
+        })
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((entry.path(), modified))
+        })
+        .collect::<Vec<_>>();
+
+    files.sort_by_key(|(_, modified)| *modified);
+
+    let files_to_delete = files.len().saturating_sub(3);
+    for (path, _) in files.into_iter().take(files_to_delete) {
+        if path != current_path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn get_recording_audio(path: String) -> Result<Vec<u8>, String> {
+    let requested_path = PathBuf::from(path);
+    let canonical_path = requested_path
+        .canonicalize()
+        .map_err(|e| format!("録音ファイルの解決失敗: {}", e))?;
+    let temp_dir = std::env::temp_dir()
+        .canonicalize()
+        .map_err(|e| format!("一時ディレクトリの解決失敗: {}", e))?;
+    let file_name = canonical_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "録音ファイル名が不正です".to_string())?;
+
+    if !canonical_path.starts_with(&temp_dir)
+        || !file_name.starts_with("voice_input_")
+        || !file_name.ends_with(".wav")
+    {
+        return Err("許可されていない録音ファイルです".to_string());
+    }
+
+    std::fs::read(canonical_path).map_err(|e| format!("録音ファイルの読み取り失敗: {}", e))
 }
 
 pub fn get_input_devices() -> Result<Vec<(usize, String)>, String> {

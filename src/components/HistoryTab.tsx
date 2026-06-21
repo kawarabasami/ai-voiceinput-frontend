@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HistoryItem } from "../types/HistoryItem";
 import { AppConfig } from "../types/AppConfig";
@@ -16,12 +16,47 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
   onCorrectionUpdate,
   onStatusChange,
 }) => {
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
   const handleCopy = async (item: HistoryItem) => {
     const text = item.correctedText || item.originalText;
     try {
       await invoke("copy_to_clipboard", { text });
     } catch (e) {
       console.error("[HistoryTab] コピー失敗:", e);
+    }
+  };
+
+  const handlePlayAudio = async (item: HistoryItem) => {
+    if (!item.audioPath) return;
+
+    try {
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
+
+      const audioBytes = await invoke<number[]>("get_recording_audio", {
+        path: item.audioPath,
+      });
+      const audioUrl = URL.createObjectURL(
+        new Blob([new Uint8Array(audioBytes)], { type: "audio/wav" })
+      );
+      const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
+      audio.addEventListener(
+        "ended",
+        () => {
+          URL.revokeObjectURL(audioUrl);
+          if (currentAudioRef.current === audio) {
+            currentAudioRef.current = null;
+          }
+        },
+        { once: true }
+      );
+      await audio.play();
+    } catch (e) {
+      console.error("[HistoryTab] 音声再生失敗:", e);
+      onStatusChange(`音声再生エラー: ${e}`, "#f44336");
+      setTimeout(() => onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888"), 3000);
     }
   };
 
@@ -72,6 +107,15 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
             )}
           </div>
           <div className="history-actions">
+            {item.audioPath && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => handlePlayAudio(item)}
+                title="文字起こしに使った音声を再生"
+              >
+                再生
+              </button>
+            )}
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => handleCopy(item)}

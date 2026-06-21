@@ -123,7 +123,7 @@ function App() {
         console.log("[App] transcribed:", transcribedText);
 
         // 履歴に追加
-        const historyItem = addItem(transcribedText);
+        const historyItem = addItem(transcribedText, wavPath);
         let textToInput = transcribedText;
 
         // 自動校正
