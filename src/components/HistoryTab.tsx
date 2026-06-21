@@ -19,7 +19,23 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentAudioUrlRef = useRef<string | null>(null);
   const activeAudioIdRef = useRef<string | null>(null);
+  const statusResetTimerRef = useRef<number | null>(null);
   const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+
+  const clearStatusResetTimer = () => {
+    if (statusResetTimerRef.current !== null) {
+      window.clearTimeout(statusResetTimerRef.current);
+      statusResetTimerRef.current = null;
+    }
+  };
+
+  const scheduleStatusReset = () => {
+    clearStatusResetTimer();
+    statusResetTimerRef.current = window.setTimeout(() => {
+      statusResetTimerRef.current = null;
+      onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888");
+    }, 3000);
+  };
 
   const cleanupCurrentAudio = () => {
     currentAudioRef.current?.pause();
@@ -41,6 +57,7 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
         currentAudioUrlRef.current = null;
       }
       activeAudioIdRef.current = null;
+      clearStatusResetTimer();
     };
   }, []);
 
@@ -93,11 +110,12 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
       cleanupCurrentAudio();
       console.error("[HistoryTab] 音声再生失敗:", e);
       onStatusChange(`音声再生エラー: ${e}`, "#f44336");
-      setTimeout(() => onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888"), 3000);
+      scheduleStatusReset();
     }
   };
 
   const handleCorrect = async (item: HistoryItem) => {
+    clearStatusResetTimer();
     onStatusChange("校正中...", "#4a9eff");
     try {
       const correctedText = await invoke<string>("correct_text", {
@@ -112,7 +130,7 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
       console.error("[HistoryTab] 校正失敗:", e);
       onStatusChange(`校正エラー: ${e}`, "#f44336");
     }
-    setTimeout(() => onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888"), 3000);
+    scheduleStatusReset();
   };
 
   if (history.length === 0) {

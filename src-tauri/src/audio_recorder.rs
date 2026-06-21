@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 
@@ -41,12 +41,22 @@ fn notify_recording_ready() {
 
 fn wait_recording_ready() -> Result<(), String> {
     let (ready, condvar) = recording_ready_signal();
-    let ready = ready.lock().map_err(|e| e.to_string())?;
-    let result = condvar
-        .wait_timeout_while(ready, Duration::from_secs(2), |ready| !*ready)
-        .map_err(|e| e.to_string())?;
+    let mut ready = ready.lock().map_err(|e| e.to_string())?;
+    let timeout = Duration::from_secs(2);
+    let start = Instant::now();
 
-    if *result.0 {
+    while !*ready {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            break;
+        }
+        let result = condvar
+            .wait_timeout(ready, timeout - elapsed)
+            .map_err(|e| e.to_string())?;
+        ready = result.0;
+    }
+
+    if *ready {
         Ok(())
     } else {
         Err("録音デバイスの開始確認がタイムアウトしました".to_string())
