@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 
@@ -15,6 +16,42 @@ unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}
 
 static ACTIVE_STREAM: Mutex<Option<SendStream>> = Mutex::new(None);
+static RECORDING_READY: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
+
+fn recording_ready_signal() -> &'static (Mutex<bool>, Condvar) {
+    RECORDING_READY.get_or_init(|| (Mutex::new(false), Condvar::new()))
+}
+
+fn reset_recording_ready() {
+    let (ready, _) = recording_ready_signal();
+    if let Ok(mut ready) = ready.lock() {
+        *ready = false;
+    }
+}
+
+fn notify_recording_ready() {
+    let (ready, condvar) = recording_ready_signal();
+    if let Ok(mut ready) = ready.lock() {
+        if !*ready {
+            *ready = true;
+            condvar.notify_all();
+        }
+    }
+}
+
+fn wait_recording_ready() -> Result<(), String> {
+    let (ready, condvar) = recording_ready_signal();
+    let ready = ready.lock().map_err(|e| e.to_string())?;
+    let result = condvar
+        .wait_timeout_while(ready, Duration::from_secs(2), |ready| !*ready)
+        .map_err(|e| e.to_string())?;
+
+    if *result.0 {
+        Ok(())
+    } else {
+        Err("録音デバイスの開始確認がタイムアウトしました".to_string())
+    }
+}
 
 impl AudioRecorder {
     pub fn new() -> Self {
@@ -58,6 +95,7 @@ pub fn start_recording(
     recorder.buffer.clear();
     recorder.sample_rate = config.sample_rate().0;
     recorder.is_recording = true;
+    reset_recording_ready();
 
     let buffer_clone = Arc::clone(&recorder_state);
 
@@ -71,10 +109,30 @@ pub fn start_recording(
         _ => Err(format!("サポートされていないサンプルフォーマットです: {:?}", sample_format)),
     }?;
 
-    stream.play().map_err(|e| format!("ストリーム開始失敗: {}", e))?;
+    drop(recorder);
+
+    if let Err(e) = stream.play() {
+        if let Ok(mut recorder) = recorder_state.lock() {
+            recorder.is_recording = false;
+            recorder.buffer.clear();
+        }
+        return Err(format!("ストリーム開始失敗: {}", e));
+    }
     
     let mut active_stream = ACTIVE_STREAM.lock().unwrap();
     *active_stream = Some(SendStream(stream));
+    drop(active_stream);
+
+    if let Err(e) = wait_recording_ready() {
+        if let Ok(mut active_stream) = ACTIVE_STREAM.lock() {
+            *active_stream = None;
+        }
+        if let Ok(mut recorder) = recorder_state.lock() {
+            recorder.is_recording = false;
+            recorder.buffer.clear();
+        }
+        return Err(e);
+    }
 
     Ok(())
 }
@@ -113,8 +171,12 @@ where
             move |data: &[T], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(f32::from(frame[0]));
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -138,8 +200,12 @@ fn build_stream_i16(
             move |data: &[i16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(frame[0] as f32 / i16::MAX as f32);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -163,8 +229,12 @@ fn build_stream_i32(
             move |data: &[i32], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(frame[0] as f32 / i32::MAX as f32);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -188,9 +258,13 @@ fn build_stream_u16(
             move |data: &[u16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             let s = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
                             recorder.buffer.push(s);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -214,8 +288,12 @@ fn build_stream_i8(
             move |data: &[i8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(frame[0] as f32 / i8::MAX as f32);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -239,9 +317,13 @@ fn build_stream_u8(
             move |data: &[u8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             let s = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
                             recorder.buffer.push(s);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
