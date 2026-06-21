@@ -186,6 +186,20 @@ const SettingsTab: React.FC<SettingsTabProps> = ({ config, onSave }) => {
       </div>
 
       <div className="settings-group settings-checkbox">
+        <label className="checkbox-label" htmlFor="silence-trim">
+          <input
+            id="silence-trim"
+            type="checkbox"
+            checked={form.isSilenceTrimEnabled}
+            onChange={(e) =>
+              setForm({ ...form, isSilenceTrimEnabled: e.target.checked })
+            }
+          />
+          文字起こし前に無音区間をカットする
+        </label>
+      </div>
+
+      <div className="settings-group settings-checkbox">
         <label className="checkbox-label" htmlFor="start-minimized">
           <input
             id="start-minimized"

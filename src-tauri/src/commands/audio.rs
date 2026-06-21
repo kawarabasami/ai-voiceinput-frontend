@@ -1,6 +1,6 @@
 use serde::Serialize;
-use tauri::State;
 use std::sync::{Arc, Mutex};
+use tauri::State;
 
 use crate::audio_recorder::{self, AudioRecorder};
 
@@ -30,6 +30,11 @@ pub fn start_recording(
 #[tauri::command]
 pub fn stop_recording(recorder: State<Arc<Mutex<AudioRecorder>>>) -> Result<String, String> {
     audio_recorder::stop_recording(recorder.inner().clone())
+}
+
+#[tauri::command]
+pub fn trim_recording_silence(path: String) -> Result<String, String> {
+    audio_recorder::trim_recording_silence(path)
 }
 
 #[tauri::command]

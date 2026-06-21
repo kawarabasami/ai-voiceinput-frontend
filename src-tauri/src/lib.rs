@@ -21,6 +21,7 @@ pub fn run() {
             audio::get_microphone_devices,
             audio::start_recording,
             audio::stop_recording,
+            audio::trim_recording_silence,
             audio::get_recording_audio,
             // ai_client
             ai_client::transcribe_audio,

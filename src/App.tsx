@@ -120,6 +120,17 @@ function App() {
           return;
         }
 
+        if (currentConfig.isSilenceTrimEnabled) {
+          setStatus("無音区間をカット中...", "#4a9eff");
+          try {
+            wavPath = await invoke<string>("trim_recording_silence", {
+              path: wavPath,
+            });
+          } catch (e) {
+            console.warn("[App] 無音区間のカットに失敗したため元音声で続行:", e);
+          }
+        }
+
         setStatus("文字起こし中...", "#4a9eff");
 
         let transcribedText: string;
