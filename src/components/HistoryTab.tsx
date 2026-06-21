@@ -1,4 +1,4 @@
-import React, { useRef } from "react";
+import React, { useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HistoryItem } from "../types/HistoryItem";
 import { AppConfig } from "../types/AppConfig";
@@ -17,6 +17,18 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
   onStatusChange,
 }) => {
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+
+  const cleanupCurrentAudio = () => {
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
+    setPlayingAudioId(null);
+  };
 
   const handleCopy = async (item: HistoryItem) => {
     const text = item.correctedText || item.originalText;
@@ -31,8 +43,12 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
     if (!item.audioPath) return;
 
     try {
-      currentAudioRef.current?.pause();
-      currentAudioRef.current = null;
+      if (playingAudioId === item.id) {
+        cleanupCurrentAudio();
+        return;
+      }
+
+      cleanupCurrentAudio();
 
       const audioBytes = await invoke<number[]>("get_recording_audio", {
         path: item.audioPath,
@@ -42,18 +58,19 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
       );
       const audio = new Audio(audioUrl);
       currentAudioRef.current = audio;
+      currentAudioUrlRef.current = audioUrl;
       audio.addEventListener(
         "ended",
         () => {
-          URL.revokeObjectURL(audioUrl);
-          if (currentAudioRef.current === audio) {
-            currentAudioRef.current = null;
-          }
+          cleanupCurrentAudio();
         },
         { once: true }
       );
+      audio.addEventListener("error", cleanupCurrentAudio, { once: true });
+      setPlayingAudioId(item.id);
       await audio.play();
     } catch (e) {
+      cleanupCurrentAudio();
       console.error("[HistoryTab] 音声再生失敗:", e);
       onStatusChange(`音声再生エラー: ${e}`, "#f44336");
       setTimeout(() => onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888"), 3000);
@@ -109,11 +126,19 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
           <div className="history-actions">
             {item.audioPath && (
               <button
-                className="btn btn-secondary btn-sm"
+                className={`btn btn-secondary btn-sm audio-play-btn ${
+                  playingAudioId === item.id ? "is-playing" : ""
+                }`}
                 onClick={() => handlePlayAudio(item)}
                 title="文字起こしに使った音声を再生"
+                aria-label={
+                  playingAudioId === item.id
+                    ? "音声の再生を停止"
+                    : "文字起こしに使った音声を再生"
+                }
               >
-                再生
+                <span className="play-icon" aria-hidden="true" />
+                <span>{playingAudioId === item.id ? "再生中" : "再生"}</span>
               </button>
             )}
             <button

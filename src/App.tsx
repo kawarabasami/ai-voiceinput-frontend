@@ -62,10 +62,10 @@ function App() {
       
       const currentConfig = configRef.current;
       try {
+        setStatus("録音中...", "#f44336");
         await invoke("start_recording", {
           deviceNumber: currentConfig.microphoneDeviceNumber,
         });
-        setStatus("録音中...", "#f44336");
       } catch (e) {
         console.error("[App] 録音開始失敗:", e);
         setStatus(`録音開始失敗: ${e}`, "#f44336");

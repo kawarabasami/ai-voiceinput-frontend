@@ -344,6 +344,41 @@ body {
   flex-wrap: wrap;
 }
 
+.audio-play-btn {
+  position: relative;
+  min-width: 72px;
+  justify-content: center;
+}
+
+.play-icon {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 8px solid currentColor;
+}
+
+.audio-play-btn.is-playing {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-dim);
+  box-shadow: 0 0 0 2px rgba(122, 162, 247, 0.15);
+}
+
+.audio-play-btn.is-playing .play-icon {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-left: 3px solid currentColor;
+  border-right: 3px solid currentColor;
+  animation: audioPulse 0.8s ease-in-out infinite;
+}
+
+@keyframes audioPulse {
+  0%, 100% { opacity: 0.55; transform: scaleY(0.8); }
+  50% { opacity: 1; transform: scaleY(1.15); }
+}
+
 /* ===== チャットタブ ===== */
 .chat-tab {
   display: flex;
