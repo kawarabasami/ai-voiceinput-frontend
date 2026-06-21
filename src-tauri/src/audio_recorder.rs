@@ -494,17 +494,19 @@ pub fn trim_recording_silence(path: String) -> Result<String, String> {
     let min_silence_samples = sample_rate * MIN_SILENCE_MS / 1000;
     let padding_samples = sample_rate * PADDING_MS / 1000;
 
+    let i16_max_f32 = i16::MAX as f32;
+    let normalization_factor = i16_max_f32 * i16_max_f32;
     let frame_rms = samples
         .chunks(frame_size)
         .map(|frame| {
-            let sum = frame
+            let sum_squares = frame
                 .iter()
                 .map(|sample| {
-                    let normalized = *sample as f32 / i16::MAX as f32;
-                    normalized * normalized
+                    let s = *sample as f32;
+                    s * s
                 })
                 .sum::<f32>();
-            (sum / frame.len() as f32).sqrt()
+            (sum_squares / (frame.len() as f32 * normalization_factor)).sqrt()
         })
         .collect::<Vec<_>>();
 
@@ -578,13 +580,27 @@ pub fn trim_recording_silence(path: String) -> Result<String, String> {
             .map_err(|e| format!("Trimmed WAV finalize failed: {}", e))?;
     }
 
-    std::fs::copy(&temp_path, &wav_path).map_err(|e| {
-        let _ = std::fs::remove_file(&temp_path);
-        format!("Trimmed WAV copy failed: {}", e)
-    })?;
-    let _ = std::fs::remove_file(&temp_path);
+    replace_recording_file(&temp_path, &wav_path)?;
 
     Ok(wav_path.to_string_lossy().to_string())
+}
+
+fn replace_recording_file(temp_path: &Path, wav_path: &Path) -> Result<(), String> {
+    match std::fs::rename(temp_path, wav_path) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            std::fs::copy(temp_path, wav_path).map_err(|copy_error| {
+                let _ = std::fs::remove_file(temp_path);
+                format!(
+                    "Trimmed WAV replace failed: rename: {}; copy: {}",
+                    rename_error, copy_error
+                )
+            })?;
+            std::fs::remove_file(temp_path)
+                .map_err(|e| format!("Trimmed WAV cleanup failed: {}", e))?;
+            Ok(())
+        }
+    }
 }
 
 pub fn get_recording_audio(path: String) -> Result<Vec<u8>, String> {
