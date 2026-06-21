@@ -1,4 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 
@@ -14,6 +16,52 @@ unsafe impl Send for SendStream {}
 unsafe impl Sync for SendStream {}
 
 static ACTIVE_STREAM: Mutex<Option<SendStream>> = Mutex::new(None);
+static RECORDING_READY: OnceLock<(Mutex<bool>, Condvar)> = OnceLock::new();
+
+fn recording_ready_signal() -> &'static (Mutex<bool>, Condvar) {
+    RECORDING_READY.get_or_init(|| (Mutex::new(false), Condvar::new()))
+}
+
+fn reset_recording_ready() {
+    let (ready, _) = recording_ready_signal();
+    if let Ok(mut ready) = ready.lock() {
+        *ready = false;
+    }
+}
+
+fn notify_recording_ready() {
+    let (ready, condvar) = recording_ready_signal();
+    if let Ok(mut ready) = ready.lock() {
+        if !*ready {
+            *ready = true;
+            condvar.notify_all();
+        }
+    }
+}
+
+fn wait_recording_ready() -> Result<(), String> {
+    let (ready, condvar) = recording_ready_signal();
+    let mut ready = ready.lock().map_err(|e| e.to_string())?;
+    let timeout = Duration::from_secs(2);
+    let start = Instant::now();
+
+    while !*ready {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            break;
+        }
+        let result = condvar
+            .wait_timeout(ready, timeout - elapsed)
+            .map_err(|e| e.to_string())?;
+        ready = result.0;
+    }
+
+    if *ready {
+        Ok(())
+    } else {
+        Err("録音デバイスの開始確認がタイムアウトしました".to_string())
+    }
+}
 
 impl AudioRecorder {
     pub fn new() -> Self {
@@ -57,6 +105,7 @@ pub fn start_recording(
     recorder.buffer.clear();
     recorder.sample_rate = config.sample_rate().0;
     recorder.is_recording = true;
+    reset_recording_ready();
 
     let buffer_clone = Arc::clone(&recorder_state);
 
@@ -70,10 +119,30 @@ pub fn start_recording(
         _ => Err(format!("サポートされていないサンプルフォーマットです: {:?}", sample_format)),
     }?;
 
-    stream.play().map_err(|e| format!("ストリーム開始失敗: {}", e))?;
+    drop(recorder);
+
+    if let Err(e) = stream.play() {
+        if let Ok(mut recorder) = recorder_state.lock() {
+            recorder.is_recording = false;
+            recorder.buffer.clear();
+        }
+        return Err(format!("ストリーム開始失敗: {}", e));
+    }
     
     let mut active_stream = ACTIVE_STREAM.lock().unwrap();
     *active_stream = Some(SendStream(stream));
+    drop(active_stream);
+
+    if let Err(e) = wait_recording_ready() {
+        if let Ok(mut active_stream) = ACTIVE_STREAM.lock() {
+            *active_stream = None;
+        }
+        if let Ok(mut recorder) = recorder_state.lock() {
+            recorder.is_recording = false;
+            recorder.buffer.clear();
+        }
+        return Err(e);
+    }
 
     Ok(())
 }
@@ -112,8 +181,12 @@ where
             move |data: &[T], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(f32::from(frame[0]));
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -137,8 +210,12 @@ fn build_stream_i16(
             move |data: &[i16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(frame[0] as f32 / i16::MAX as f32);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -162,8 +239,12 @@ fn build_stream_i32(
             move |data: &[i32], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(frame[0] as f32 / i32::MAX as f32);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -187,9 +268,13 @@ fn build_stream_u16(
             move |data: &[u16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             let s = frame[0] as f32 / u16::MAX as f32 * 2.0 - 1.0;
                             recorder.buffer.push(s);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -213,8 +298,12 @@ fn build_stream_i8(
             move |data: &[i8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             recorder.buffer.push(frame[0] as f32 / i8::MAX as f32);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -238,9 +327,13 @@ fn build_stream_u8(
             move |data: &[u8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
+                        let had_samples = !recorder.buffer.is_empty();
                         for frame in data.chunks(channels) {
                             let s = frame[0] as f32 / u8::MAX as f32 * 2.0 - 1.0;
                             recorder.buffer.push(s);
+                        }
+                        if !had_samples && !recorder.buffer.is_empty() {
+                            notify_recording_ready();
                         }
                     }
                 }
@@ -273,7 +366,7 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
         return Err("録音データが空です".to_string());
     }
 
-    let temp_path = std::env::temp_dir().join("voice_input_temp.wav");
+    let temp_path = recording_path()?;
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate,
@@ -291,8 +384,78 @@ pub fn stop_recording(recorder_state: Arc<Mutex<AudioRecorder>>) -> Result<Strin
             .map_err(|e| format!("WAV書き込み失敗: {}", e))?;
     }
     writer.finalize().map_err(|e| format!("WAV確定失敗: {}", e))?;
+    if let Err(e) = cleanup_old_recordings(&temp_path) {
+        eprintln!("[AudioRecorder] 古い録音ファイルのクリーンアップに失敗しました: {}", e);
+    }
 
     Ok(temp_path.to_string_lossy().to_string())
+}
+
+fn recordings_dir() -> PathBuf {
+    std::env::temp_dir().join("voice_input_app")
+}
+
+fn recording_path() -> Result<PathBuf, String> {
+    let dir = recordings_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("録音ディレクトリの作成失敗: {}", e))?;
+    Ok(dir.join(format!("voice_input_{}.wav", uuid::Uuid::new_v4())))
+}
+
+fn cleanup_old_recordings(current_path: &Path) -> Result<(), String> {
+    let recordings_dir = current_path
+        .parent()
+        .ok_or_else(|| "録音ディレクトリを特定できません".to_string())?;
+    let mut files = std::fs::read_dir(recordings_dir)
+        .map_err(|e| format!("録音ディレクトリの読み取り失敗: {}", e))?
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("voice_input_") && name.ends_with(".wav"))
+                .unwrap_or(false)
+        })
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((entry.path(), modified))
+        })
+        .collect::<Vec<_>>();
+
+    files.sort_by_key(|(_, modified)| *modified);
+
+    let files_to_delete = files.len().saturating_sub(3);
+    for (path, _) in files.into_iter().take(files_to_delete) {
+        if path != current_path {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    Ok(())
+}
+
+pub fn get_recording_audio(path: String) -> Result<Vec<u8>, String> {
+    let requested_path = PathBuf::from(path);
+    let canonical_path = requested_path
+        .canonicalize()
+        .map_err(|e| format!("録音ファイルの解決失敗: {}", e))?;
+    let temp_dir = recordings_dir()
+        .canonicalize()
+        .map_err(|e| format!("録音ディレクトリの解決失敗: {}", e))?;
+    let file_name = canonical_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "録音ファイル名が不正です".to_string())?;
+
+    if !canonical_path.starts_with(&temp_dir)
+        || !file_name.starts_with("voice_input_")
+        || !file_name.ends_with(".wav")
+    {
+        return Err("許可されていない録音ファイルです".to_string());
+    }
+
+    std::fs::read(canonical_path).map_err(|e| format!("録音ファイルの読み取り失敗: {}", e))
 }
 
 pub fn get_input_devices() -> Result<Vec<(usize, String)>, String> {

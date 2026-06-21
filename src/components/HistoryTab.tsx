@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { HistoryItem } from "../types/HistoryItem";
 import { AppConfig } from "../types/AppConfig";
@@ -16,6 +16,51 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
   onCorrectionUpdate,
   onStatusChange,
 }) => {
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
+  const activeAudioIdRef = useRef<string | null>(null);
+  const statusResetTimerRef = useRef<number | null>(null);
+  const [playingAudioId, setPlayingAudioId] = useState<string | null>(null);
+
+  const clearStatusResetTimer = () => {
+    if (statusResetTimerRef.current !== null) {
+      window.clearTimeout(statusResetTimerRef.current);
+      statusResetTimerRef.current = null;
+    }
+  };
+
+  const scheduleStatusReset = () => {
+    clearStatusResetTimer();
+    statusResetTimerRef.current = window.setTimeout(() => {
+      statusResetTimerRef.current = null;
+      onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888");
+    }, 3000);
+  };
+
+  const cleanupCurrentAudio = () => {
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
+    activeAudioIdRef.current = null;
+    setPlayingAudioId(null);
+  };
+
+  useEffect(() => {
+    return () => {
+      currentAudioRef.current?.pause();
+      currentAudioRef.current = null;
+      if (currentAudioUrlRef.current) {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+        currentAudioUrlRef.current = null;
+      }
+      activeAudioIdRef.current = null;
+      clearStatusResetTimer();
+    };
+  }, []);
+
   const handleCopy = async (item: HistoryItem) => {
     const text = item.correctedText || item.originalText;
     try {
@@ -25,7 +70,52 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
     }
   };
 
+  const handlePlayAudio = async (item: HistoryItem) => {
+    if (!item.audioPath) return;
+
+    try {
+      if (activeAudioIdRef.current === item.id) {
+        cleanupCurrentAudio();
+        return;
+      }
+
+      cleanupCurrentAudio();
+      activeAudioIdRef.current = item.id;
+      setPlayingAudioId(item.id);
+
+      const audioBytes = await invoke<number[]>("get_recording_audio", {
+        path: item.audioPath,
+      });
+
+      if (activeAudioIdRef.current !== item.id) {
+        return;
+      }
+
+      const audioUrl = URL.createObjectURL(
+        new Blob([new Uint8Array(audioBytes)], { type: "audio/wav" })
+      );
+      const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
+      currentAudioUrlRef.current = audioUrl;
+      audio.addEventListener(
+        "ended",
+        () => {
+          cleanupCurrentAudio();
+        },
+        { once: true }
+      );
+      audio.addEventListener("error", cleanupCurrentAudio, { once: true });
+      await audio.play();
+    } catch (e) {
+      cleanupCurrentAudio();
+      console.error("[HistoryTab] 音声再生失敗:", e);
+      onStatusChange(`音声再生エラー: ${e}`, "#f44336");
+      scheduleStatusReset();
+    }
+  };
+
   const handleCorrect = async (item: HistoryItem) => {
+    clearStatusResetTimer();
     onStatusChange("校正中...", "#4a9eff");
     try {
       const correctedText = await invoke<string>("correct_text", {
@@ -40,7 +130,7 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
       console.error("[HistoryTab] 校正失敗:", e);
       onStatusChange(`校正エラー: ${e}`, "#f44336");
     }
-    setTimeout(() => onStatusChange("待機中 (Ctrl+Win で録音開始)", "#888"), 3000);
+    scheduleStatusReset();
   };
 
   if (history.length === 0) {
@@ -72,6 +162,23 @@ const HistoryTab: React.FC<HistoryTabProps> = ({
             )}
           </div>
           <div className="history-actions">
+            {item.audioPath && (
+              <button
+                className={`btn btn-secondary btn-sm audio-play-btn ${
+                  playingAudioId === item.id ? "is-playing" : ""
+                }`}
+                onClick={() => handlePlayAudio(item)}
+                title="文字起こしに使った音声を再生"
+                aria-label={
+                  playingAudioId === item.id
+                    ? "音声の再生を停止"
+                    : "文字起こしに使った音声を再生"
+                }
+              >
+                <span className="play-icon" aria-hidden="true" />
+                <span>{playingAudioId === item.id ? "再生中" : "再生"}</span>
+              </button>
+            )}
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => handleCopy(item)}
