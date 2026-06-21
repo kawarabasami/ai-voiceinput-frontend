@@ -103,7 +103,7 @@ pub fn start_recording(
     let sample_format = config.sample_format();
 
     recorder.buffer.clear();
-    recorder.sample_rate = config.sample_rate().0;
+    recorder.sample_rate = config.sample_rate();
     recorder.is_recording = true;
     reset_recording_ready();
 
@@ -155,7 +155,7 @@ fn find_config_16khz(device: &Device) -> Result<SupportedStreamConfig, String> {
         .supported_input_configs()
         .map_err(|e| format!("設定取得失敗: {}", e))?;
 
-    let target_rate = cpal::SampleRate(16000);
+    let target_rate = 16000;
 
     for range in supported {
         if range.min_sample_rate() <= target_rate && target_rate <= range.max_sample_rate() {
@@ -180,7 +180,7 @@ where
     let channels = config.channels as usize;
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[T], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
@@ -209,7 +209,7 @@ fn build_stream_i16(
     let channels = config.channels as usize;
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[i16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
@@ -238,7 +238,7 @@ fn build_stream_i32(
     let channels = config.channels as usize;
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[i32], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
@@ -267,7 +267,7 @@ fn build_stream_u16(
     let channels = config.channels as usize;
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[u16], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
@@ -297,7 +297,7 @@ fn build_stream_i8(
     let channels = config.channels as usize;
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[i8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
@@ -326,7 +326,7 @@ fn build_stream_u8(
     let channels = config.channels as usize;
     let stream = device
         .build_input_stream(
-            config,
+            config.clone(),
             move |data: &[u8], _| {
                 if let Ok(mut recorder) = state.lock() {
                     if recorder.is_recording {
@@ -635,7 +635,7 @@ pub fn get_input_devices() -> Result<Vec<(usize, String)>, String> {
     Ok(devices
         .enumerate()
         .map(|(i, d)| {
-            let name = d.name().unwrap_or_else(|_| format!("デバイス {}", i));
+            let name = d.to_string();
             (i, name)
         })
         .collect())
