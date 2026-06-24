@@ -6,7 +6,7 @@ mod windows_hook {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Mutex;
     use tauri::{AppHandle, Emitter};
-    use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LCONTROL, VK_LWIN, VK_RCONTROL, VK_RWIN,
     };
@@ -82,9 +82,9 @@ mod windows_hook {
         }
 
         let h_hook = if let Ok(guard) = HOOK_HANDLE.lock() {
-            guard.as_ref().map(|w| w.0).unwrap_or_default()
+            guard.as_ref().map(|w| w.0)
         } else {
-            HHOOK::default()
+            None
         };
 
         CallNextHookEx(
@@ -115,8 +115,9 @@ mod windows_hook {
             
             use windows::Win32::System::LibraryLoader::GetModuleHandleW;
             let hmod = GetModuleHandleW(None).unwrap_or_default();
+            let hinstance = HINSTANCE(hmod.0);
             
-            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hmod, 0)
+            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), Some(hinstance), 0)
                 .expect("キーボードフックの設定に失敗しました");
             
             if let Ok(mut guard) = HOOK_HANDLE.lock() {
