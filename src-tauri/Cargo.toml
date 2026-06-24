@@ -1,6 +1,6 @@
 [package]
 name = "ai-voiceinput-frontend"
-version = "0.1.0"
+version = "0.2.0"
 description = "VoiceInputApp Tauri版"
 authors = ["you"]
 edition = "2021"
